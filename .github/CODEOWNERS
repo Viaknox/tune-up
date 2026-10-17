@@ -12,4 +12,6 @@ engine/package.json         @pjpoulose
 engine/LICENSE              @pjpoulose
 engine/RELEASE_CHANNEL      @pjpoulose
 docs/CLI-PLAN.md            @pjpoulose
+docs/RELEASING.md           @pjpoulose
+engine/CHANGELOG.md         @pjpoulose
 .sast-check.toml            @pjpoulose
