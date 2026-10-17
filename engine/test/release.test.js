@@ -232,11 +232,14 @@ test('PR #33 review: both channel comparisons are the same code, and a re-run of
 });
 
 test('PR #33 review (S0/S1, PT2, PT5): CODEOWNERS covers the gate and release files, and sast-check runs pinned', () => {
-  const owners = read('../../.github/CODEOWNERS').split('\n').filter(l => l.trim() && !l.startsWith('#')).map(l => l.trim().split(/\s+/));
-  const covered = new Map(owners.map(([path, ...who]) => [path, who]));
-  for (const p of ['/.github/', '/.github/CODEOWNERS', '/engine/cli.js', '/engine/src/', '/engine/test/', '/engine/scripts/', '/engine/package.json',
-    '/engine/LICENSE', '/engine/RELEASE_CHANNEL', '/docs/CLI-PLAN.md', '/.sast-check.toml']) {
-    assert.deepEqual(covered.get(p), ['@pjpoulose'], `${p} must be owned by Paul`);
+  // GitHub semantics: the last matching line wins; `dir/**` covers everything under dir, a leading / anchors to the root.
+  const rules = read('../../.github/CODEOWNERS').split('\n').filter(l => l.trim() && !l.trim().startsWith('#')).map(l => l.trim().split(/\s+/));
+  const matches = (pat, file) => { const p = pat.replace(/^\//, ''); return p.endsWith('/**') ? file.startsWith(p.slice(0, -2)) : p.endsWith('/') ? file.startsWith(p) : file === p; };
+  const ownerOf = (file) => { let who = null; for (const [pat, ...o] of rules) if (matches(pat, file)) who = o; return who; };
+  for (const f of ['.github/CODEOWNERS', '.github/workflows/release.yml', '.github/workflows/sast.yml', '.github/workflows/test.yml', 'engine/cli.js',
+    'engine/src/gate.js', 'engine/test/gate.test.js', 'engine/test/BASELINE', 'engine/scripts/test.mjs', 'engine/package.json', 'engine/LICENSE',
+    'engine/RELEASE_CHANNEL', 'engine/CHANGELOG.md', 'docs/CLI-PLAN.md', 'docs/RELEASING.md', '.sast-check.toml']) {
+    assert.deepEqual(ownerOf(f), ['@pjpoulose'], `${f} must be owned by Paul`);
   }
   const sast = read('../../.github/workflows/sast.yml');
   assert.match(sast, /\non:\n  pull_request: /); assert.doesNotMatch(sast, /^\s*pull_request_target:/m);
