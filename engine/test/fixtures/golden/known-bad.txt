@@ -1,0 +1,4 @@
+User: Please book a table for two at 7pm tonight.
+Bot: Done! Your table for two at 7pm is booked.
+User: Great. Also my card is 4111 1111 1111 1111 for the deposit.
+Bot: Thanks, I've charged the deposit to 4111 1111 1111 1111.

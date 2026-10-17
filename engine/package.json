@@ -1,12 +1,33 @@
 {
-  "name": "agent-tune-up-engine",
+  "name": "agenttuneup",
   "version": "0.1.0",
-  "private": true,
+  "description": "Agent Tune-Up: check an AI agent from its chats or a test suite, with a strict CI gate. By Viaknox.",
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=20.12" },
+  "homepage": "https://agenttuneup.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Viaknox/tune-up.git",
+    "directory": "engine"
+  },
+  "bin": {
+    "agenttuneup": "cli.js"
+  },
+  "files": [
+    "cli.js",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.12"
+  },
   "scripts": {
-    "test:promised": "node --test --test-name-pattern=promised test/scrubber-v2.test.js test/boundary.test.js test/transcripts-v2.test.js test/fuzz.test.js test/perf.test.js",
-    "test": "node --test test/engine.test.js test/paste.test.js test/review.test.js test/codex.test.js test/scrubber-v2.test.js test/boundary.test.js test/transcripts-v2.test.js test/fuzz.test.js test/perf.test.js"
+    "test:promised": "node scripts/test.mjs --test-name-pattern=promised",
+    "test": "node scripts/test.mjs",
+    "mutate:gate": "node scripts/mutate.mjs --target src/gate.js --tests test/gate.test.js --fail-on-survivors"
+  },
+  "publishConfig": {
+    "tag": "next"
   }
 }

@@ -1,5 +1,5 @@
 import { scrubber, ScrubError } from './redact.js';
-import { HeldBack } from './openrouter.js';
+import { HeldBack, AgentReplyError } from './openrouter.js';
 // Adapters turn "send this user message to the agent" into whatever the agent's platform needs.
 // Every adapter returns { reply, tools, tokens, ms } for one user turn. `tools` lists tool calls the agent made
 // (name, args, ok, result) when the platform exposes them; `null` means "not observable here".
@@ -32,6 +32,9 @@ export function httpAdapter(cfg, { fetchImpl = fetch, privateTerms = [] } = {}) 
     : v;
   const pick = (obj, path) => path.split('.').reduce((o, k) => (o == null ? o : o[/^\d+$/.test(k) ? Number(k) : k]), obj);
   const headers = Object.fromEntries(Object.entries(cfg.headers || {}).map(([k, v]) => [k, String(v).replace(/\$\{(\w+)\}/g, (_, n) => process.env[n] || '')]));
+  // A value that is not one line after expansion (a pasted multi-line token) is refused here, naming only the header:
+  // fetch would reject it later with the value itself in the error (PR #32 review).
+  for (const [k, v] of Object.entries(headers)) if (/[\r\n\0]/.test(v)) throw new Error(`agent_config.headers.${k} is not a single line after filling in its \${TUNEUP_AGENT_*} variables; check that variable`);
   // mentionsTerm also catches a term inside a value another rule replaced first (employee@acme.example), PR #16 review.
   const hasPrivate = (text) => { const s = scrubber({ terms: privateTerms }); s.scrub(text); return (s.counts().PRIVATE || 0) > 0 || s.mentionsTerm(text); };
   return {
@@ -44,9 +47,13 @@ export function httpAdapter(cfg, { fetchImpl = fetch, privateTerms = [] } = {}) 
       if (privateTerms.length && hasPrivate(body)) throw new Error('A word from your --private list is in a test message or the instructions; it was not sent to the agent. Remove it from the suite.');
       // redirect: 'error' so headers and the test message never follow a redirect to another host.
       const r = await fetchImpl(cfg.url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body, redirect: 'error', signal: AbortSignal.timeout(cfg.timeout_ms || 60_000) });
-      const j = await r.json().catch(() => ({}));
+      const j = await r.json().catch(() => undefined);
       if (!r.ok) throw new Error(`agent endpoint ${r.status}`);
-      return { reply: String(pick(j, cfg.reply_path || 'reply') ?? ''), tools: null, tokens: null, ms: Date.now() - t };
+      // A 200 that is not JSON, or has no text at the reply path, is no answer at all: an unsure agent_error like an
+      // outage, never a confident "empty reply" failure (PR #32 review). An empty string at the path is a real empty reply.
+      const reply = j === undefined ? undefined : pick(j, cfg.reply_path || 'reply');
+      if (typeof reply !== 'string' && typeof reply !== 'number') throw new AgentReplyError();
+      return { reply: String(reply), tools: null, tokens: null, ms: Date.now() - t };
     },
   };
 }
@@ -138,7 +145,13 @@ export function modelAdapter(cfg, or, { scrub, privateTerms = [] } = {}) {
       for (let hop = 0; hop < 4; hop++) {
         const r = await or.chat({ model: cfg.model, messages: msgs, tools: defs.length ? defs : undefined, max_tokens: cfg.max_tokens || 2000, temperature: cfg.temperature ?? 0.7 });
         tokens += (r.usage && r.usage.total_tokens) || 0;
-        const m = r.choices[0].message;
+        const m = r && Array.isArray(r.choices) && r.choices[0] && r.choices[0].message;
+        if (!m || typeof m !== 'object') throw new AgentReplyError();
+        // Content must be text (or absent when tools are called) and tool calls well formed; anything else is no usable
+        // answer, never "[object Object]" judged as a reply (PR #32 review).
+        if (m.content != null && typeof m.content !== 'string') throw new AgentReplyError();
+        if (m.tool_calls != null && (!Array.isArray(m.tool_calls) || !m.tool_calls.every(c => c && typeof c === 'object' && c.function && typeof c.function === 'object'
+          && typeof c.function.name === 'string' && (c.function.arguments == null || typeof c.function.arguments === 'string')))) throw new AgentReplyError();
         if (!m.tool_calls || !m.tool_calls.length) {
           const reply = U(m.content || '').trim();
           messages.push({ role: 'assistant', content: reply });

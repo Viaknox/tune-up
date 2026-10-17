@@ -8,8 +8,23 @@ const AGENT = /^(assistant|bot|ai|agent|grok|chatgpt|claude|gemini|copilot|suppo
 
 // Only user and agent turns count; system, developer and tool messages are not part of the conversation.
 const roleOf = (r) => /^(user|human|customer)$/i.test(r) ? 'user' : /^(assistant|bot|ai|agent|model)$/i.test(r) ? 'assistant' : null;
-const norm = (m) => ({ role: roleOf(String(m.role || m.author || m.sender || '')),
-  content: String(m.content ?? m.text ?? m.message ?? '').trim() });
+// A message that is not an object (null, a number, a string) has no role, so it is dropped like a system message.
+// Content is text: a string, a number, or a list of parts whose text parts are joined (multimodal exports). Anything
+// else (an object, a list with non-text parts only) cannot be read, and `bad` makes the whole chat unreadable rather than
+// "[object Object]" passing the rule checks (PR #32 review).
+const textOf = (v) => {
+  if (v == null) return '';
+  if (typeof v === 'string' || typeof v === 'number') return String(v);
+  if (Array.isArray(v)) { const parts = v.map(p => (typeof p === 'string' ? p : p && typeof p === 'object' && typeof p.text === 'string' ? p.text : null)); return parts.some(x => x !== null) ? parts.filter(x => x !== null).join('\n') : null; }
+  return null;
+};
+const norm = (m) => {
+  if (!m || typeof m !== 'object') return { role: null, content: '' };
+  const role = roleOf(String(m.role || m.author || m.sender || '')), t = textOf(m.content ?? m.text ?? m.message);
+  // Only an unreadable user or agent turn spoils the chat; system and tool turns are dropped whatever they hold, so a
+  // structured tool result never makes a readable chat unreadable (PR #32 review).
+  return { role, content: (t ?? '').trim(), ...(t === null && role ? { bad: true } : {}) };
+};
 
 const twoSided = (c) => c.some(m => m.role === 'user') && c.some(m => m.role === 'assistant');
 
@@ -18,14 +33,23 @@ export function parseTranscripts(raw, { agentName } = {}) {
   const txt = String(raw).trim();
   if (txt.startsWith('[') || txt.startsWith('{')) {
     const j = JSON.parse(txt);
-    const list = Array.isArray(j) ? (Array.isArray(j[0]) || (j[0] && j[0].messages) ? j : [j]) : (j.conversations || [j]);
-    return list.map(c => (Array.isArray(c) ? c : c.messages || []).map(norm).filter(m => m.role && m.content)).filter(twoSided);
+    // An array is a list of chats unless it is a flat message list, so a malformed first entry does not hide the rest.
+    // Which shape an array is (PR #32 reviews): any entry that is itself a chat (an array, or {messages}) makes it a list of
+    // chats, each counted; otherwise any message-shaped entry makes it one chat's flat message list (stray null or
+    // metadata entries are dropped like system turns); with neither, every entry is a malformed chat and each is counted.
+    const isChat = (e) => Array.isArray(e) || (!!e && typeof e === 'object' && 'messages' in e);
+    const isMessage = (e) => !!e && typeof e === 'object' && !Array.isArray(e) && !('messages' in e) && ['role', 'author', 'sender'].some(k => k in e);
+    const list = Array.isArray(j) ? (!j.some(isChat) && j.some(isMessage) ? [j] : j) : (j.conversations || [j]);
+    return counted(list.map(c => { const ms = (Array.isArray(c) ? c : c && Array.isArray(c.messages) ? c.messages : []).map(norm);
+      return ms.some(m => m.bad) ? [] : ms.filter(m => m.role && m.content); }));
   }
   const named = agentName ? new RegExp(`^${agentName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:\\s*`, 'i') : null;
   // Linear split on separator lines (a regex with \s* around ^/$ was quadratic on long runs of blank lines).
   const blocks = [[]];
   for (const line of txt.split(/\r?\n/)) { if (/^[ \t]*(?:-{3,}|={3,})[ \t]*$/.test(line)) blocks.push([]); else blocks[blocks.length - 1].push(line); }
-  return blocks.map(b => b.join('\n')).map(block => {
+  // A block with any text in it is a chat someone meant to check; empty blocks (a trailing ---) are not.
+  const meant = blocks.map(b => b.join('\n')).filter(b => b.trim());
+  return counted(meant.map(block => {
     const msgs = [];
     for (const line of block.split(/\r?\n/)) {
       let m;
@@ -34,8 +58,19 @@ export function parseTranscripts(raw, { agentName } = {}) {
       else if (msgs.length && line.trim()) msgs[msgs.length - 1].content += '\n' + line;
     }
     return msgs.map(m => ({ ...m, content: m.content.trim() })).filter(m => m.content);
-  }).filter(twoSided);
+  }));
 }
+
+// Keeps the two-sided chats. Every candidate entry has a 1-based position in the input: `positions` holds the kept chats'
+// positions and `rejected` the entries that could not be read as a chat (one-sided, malformed, empty), so the gate counts
+// each rejected entry as a missing case-run and the report lists it (docs/CLI-PLAN.md §4: incomplete input never helps).
+// Both lists come from this one split, so the expected count and the parsed chats can never disagree.
+const counted = (convos) => {
+  const ok = [], positions = [], rejected = [];
+  convos.forEach((c, i) => { if (twoSided(c)) { ok.push(c); positions.push(i + 1); } else rejected.push(i + 1); });
+  Object.defineProperty(ok, 'positions', { value: positions, enumerable: false });
+  return Object.defineProperty(ok, 'rejected', { value: rejected, enumerable: false });
+};
 
 // Rule checks that only make sense on real conversations: friction the user felt.
 const CORRECTION = /^(no\b|nope|wait\b|that'?s (wrong|not (it|right|what i))|i said|i already (said|told)|again[,!?.]|still (wrong|not)|you('re| are) (wrong|not listening)|wrong\b|not what i asked)|\b(why did you (say|tell)|you said\b|can you even|i (still )?(haven'?t|didn'?t) (get|got|receive))/i;

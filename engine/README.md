@@ -4,19 +4,68 @@ Evaluates an AI agent against a test suite and writes a six-part report card. It
 
 ## Run it
 
-Needs Node 20+ and an OpenRouter key in `TUNEUP_OPENROUTER_KEY` or in a file passed with `--keyfile` (a line like `OPENROUTER=sk-or-...`). The key is never printed or logged.
+Needs Node 20.12+ and, for anything beyond the local rule checks, an OpenRouter key in `TUNEUP_OPENROUTER_KEY` or in a file passed with `--keyfile` (a line like `OPENROUTER=sk-or-...`). The key is never printed or logged.
 
 ```bash
-cd engine
-npm test                                                     # offline unit tests
 # Check real chats you pasted or exported (Level 1). Without --consent nothing leaves your machine.
-node cli.js check examples/sample-chats.txt --instructions examples/sample-instructions.txt --agent SupportBot
-node cli.js check examples/sample-chats.txt --instructions examples/sample-instructions.txt --agent SupportBot --consent
+npx agenttuneup@0.1.0 check chats.txt --instructions instructions.txt --agent SupportBot
+npx agenttuneup@0.1.0 check chats.txt --instructions instructions.txt --agent SupportBot --consent
 
 # Test an agent by re-running cases against it (Level 2), then try a verified tune-up
-node cli.js run  examples/bookbot.suite.json --out my-run --consent    # my-run/report.md + report.json
-node cli.js tune examples/bookbot.suite.json --out my-run --consent    # one verified attempt; run again to retry
+npx agenttuneup@0.1.0 run  my-agent.suite.json --out my-run --consent    # my-run/report.md + report.json
+npx agenttuneup@0.1.0 tune my-agent.suite.json --out my-run --consent    # one verified attempt; run again to retry
 ```
+
+Sample files to start from (sample chats, instructions and a full suite) are in the repository: [engine/examples](https://github.com/Viaknox/tune-up/tree/main/engine/examples). To work on the engine itself, clone the repository and run `npm test` in `engine/`.
+
+## Use it in CI (strict gate)
+
+Add `--gate` to `check` or `run`. Without it the exit code is always `0`, whatever the result (the verdict is still printed).
+
+```bash
+npx agenttuneup@0.1.0 check chats.txt --instructions instructions.txt --consent --gate --json --out tune-up-report
+```
+
+| Exit code | Verdict line | When |
+| --- | --- | --- |
+| `0` | `PASS (judged)` | Every chat or case passed with the judge (`--consent`) |
+| `0` | `PASS: local rules only` | No `--consent`: only the local rule checks ran, and they all passed. Weaker evidence; never use it for a badge |
+| `1` | `FAIL` | The pass rate is below `--min`, too many results were unsure, or a "Follows your rules" check failed |
+| `3` | `UNDETERMINED` | Nothing to check, expected chats or cases missing (an entry that is not a readable chat counts as missing), a requested judge or agent call failed, or every chat was held back |
+| `2` | `ERROR: usage/config` | Unknown option, bad suite, `--consent` with no key |
+
+The defaults are strict: every chat or case must pass (`--min 100`), none may be unsure (`--max-undetermined 0`), and one "Follows your rules" failure fails the gate. You can loosen them with `--min <0-100>`, `--max-undetermined <0-100>` and `--allow-rules-fail`; each one you use is printed in the verdict line and recorded in `gate.json` (written with `--json`), so a weaker gate is visible in the CI log. These options need `--gate`. There is no option or setting that skips a check, and unknown options and unknown `TUNEUP_*` settings stop the run with `2`.
+
+The exit code comes from the run itself, never from an old or edited `report.json` or `gate.json`. A judge that was asked for and could not answer never falls back to `PASS: local rules only`: it is `UNDETERMINED`. Store the key as a CI secret, never in the repo.
+
+```yaml
+# .github/workflows/agent-check.yml
+on:
+  pull_request:                # every pull request: local rules only, no secrets in the job
+  push:
+    branches: [main]           # after a merge: the full check with the judge
+jobs:
+  agent-check:
+    runs-on: ubuntu-latest
+    # The key lives only in this environment. Limit it to the main branch (and add required reviewers if you like),
+    # so code in a pull request, from a fork or from this repository, can never read it.
+    environment: ${{ github.event_name == 'push' && 'agent-check' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - if: github.event_name == 'pull_request'
+        run: npx agenttuneup@0.1.0 check chats.txt --instructions instructions.txt --gate --json --out tune-up-report
+      - if: github.event_name == 'push'
+        run: npx agenttuneup@0.1.0 check chats.txt --instructions instructions.txt --consent --gate --json --out tune-up-report
+        env:
+          TUNEUP_OPENROUTER_KEY: ${{ secrets.TUNEUP_OPENROUTER_KEY }}
+```
+
+A pull request can change the workflow it runs, so a job that runs pull-request code must never hold the key, whoever
+opened the pull request. Pull requests therefore get the local rules only (`PASS: local rules only` at best, nothing
+sent), and the judged check runs after the merge, with the key stored only in the `agent-check` environment restricted
+to `main`. Never use `pull_request_target` for this.
 
 ## Your data
 
@@ -50,7 +99,7 @@ Every report states how much it could see. **Level 1** is chats only. **Level 2*
 
 ## Suites and adapters
 
-A suite (see `examples/bookbot.suite.json`) holds the agent's instructions, the sentences that must never change (`sacred`), how to reach the agent (`agent_config`), and the test cases. Each case has an intent, the user turns, and what to expect.
+A suite (see [`examples/bookbot.suite.json`](https://github.com/Viaknox/tune-up/blob/main/engine/examples/bookbot.suite.json)) holds the agent's instructions, the sentences that must never change (`sacred`), how to reach the agent (`agent_config`), and the test cases. Each case has an intent, the user turns, and what to expect.
 
 | Adapter | Use | Tool calls visible? |
 | --- | --- | --- |
