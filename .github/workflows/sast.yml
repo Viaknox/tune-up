@@ -1,0 +1,29 @@
+# sast-check (docs/CLI-PLAN.md S1, PG2, PT5): a security scan on every pull request.
+# Make "sast-check / scan" a required check on main (docs/RELEASING.md step A6).
+name: sast-check
+
+on:
+  pull_request:          # never pull_request_target: that would run PR code with secrets
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sast-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: sast-check / scan   # the check name branch protection requires (a bare "scan" is ambiguous)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write   # one sticky PR comment (skipped automatically for fork PRs)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Pinned to a full commit SHA, never a branch or tag: the action runs with this PR's token.
+      - uses: Viaknox/sast-check@890048d102e5eaa16cc7f7cac0bf7a06442d0a74   # main, 2026-10-17

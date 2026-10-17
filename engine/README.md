@@ -8,12 +8,12 @@ Needs Node 20.12+ and, for anything beyond the local rule checks, an OpenRouter 
 
 ```bash
 # Check real chats you pasted or exported (Level 1). Without --consent nothing leaves your machine.
-npx agenttuneup@0.1.0 check chats.txt --instructions instructions.txt --agent SupportBot
-npx agenttuneup@0.1.0 check chats.txt --instructions instructions.txt --agent SupportBot --consent
+npx agenttuneup@0.1.0-rc.0 check chats.txt --instructions instructions.txt --agent SupportBot
+npx agenttuneup@0.1.0-rc.0 check chats.txt --instructions instructions.txt --agent SupportBot --consent
 
 # Test an agent by re-running cases against it (Level 2), then try a verified tune-up
-npx agenttuneup@0.1.0 run  my-agent.suite.json --out my-run --consent    # my-run/report.md + report.json
-npx agenttuneup@0.1.0 tune my-agent.suite.json --out my-run --consent    # one verified attempt; run again to retry
+npx agenttuneup@0.1.0-rc.0 run  my-agent.suite.json --out my-run --consent    # my-run/report.md + report.json
+npx agenttuneup@0.1.0-rc.0 tune my-agent.suite.json --out my-run --consent    # one verified attempt; run again to retry
 ```
 
 Sample files to start from (sample chats, instructions and a full suite) are in the repository: [engine/examples](https://github.com/Viaknox/tune-up/tree/main/engine/examples). To work on the engine itself, clone the repository and run `npm test` in `engine/`.
@@ -23,7 +23,7 @@ Sample files to start from (sample chats, instructions and a full suite) are in 
 Add `--gate` to `check` or `run`. Without it the exit code is always `0`, whatever the result (the verdict is still printed).
 
 ```bash
-npx agenttuneup@0.1.0 check chats.txt --instructions instructions.txt --consent --gate --json --out tune-up-report
+npx agenttuneup@0.1.0-rc.0 check chats.txt --instructions instructions.txt --consent --gate --json --out tune-up-report
 ```
 
 | Exit code | Verdict line | When |
@@ -55,9 +55,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - if: github.event_name == 'pull_request'
-        run: npx agenttuneup@0.1.0 check chats.txt --instructions instructions.txt --gate --json --out tune-up-report
+        run: npx agenttuneup@0.1.0-rc.0 check chats.txt --instructions instructions.txt --gate --json --out tune-up-report
       - if: github.event_name == 'push'
-        run: npx agenttuneup@0.1.0 check chats.txt --instructions instructions.txt --consent --gate --json --out tune-up-report
+        run: npx agenttuneup@0.1.0-rc.0 check chats.txt --instructions instructions.txt --consent --gate --json --out tune-up-report
         env:
           TUNEUP_OPENROUTER_KEY: ${{ secrets.TUNEUP_OPENROUTER_KEY }}
 ```

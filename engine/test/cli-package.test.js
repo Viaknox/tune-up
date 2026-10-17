@@ -20,15 +20,15 @@ const pkg = JSON.parse(readFileSync(join(ENGINE, 'package.json'), 'utf8'));
 const KEY = 'sk-or-v1-PKGTEST' + 'z9'.repeat(20);
 const GOOD = { completed: 0.95, truthful: 0.05, followed_rules: 0.95, needless_question: 0.05, initiative: 0.05, frustrated: 0.05 };
 
-// Build and install the tarball once for this file.
+// Build and install the tarball once for this file. The release workflow sets TU_TEST_TARBALL to the exact tarball it
+// is about to publish, so the smoke tests run on that file rather than on a fresh pack (docs/CLI-PLAN.md PT8).
 const PACKS = mkdtempSync(join(tmpdir(), 'tu-pack-'));
 const APP = mkdtempSync(join(tmpdir(), 'tu-app-'));
 const npm = (args, cwd) => spawnSync('npm', args, { cwd, encoding: 'utf8', shell: WIN });
 {
-  const p = npm(['pack', '--silent', '--pack-destination', PACKS], ENGINE);
-  if (p.status !== 0) throw new Error('npm pack failed: ' + p.stderr);
+  if (!process.env.TU_TEST_TARBALL) { const p = npm(['pack', '--silent', '--pack-destination', PACKS], ENGINE); if (p.status !== 0) throw new Error('npm pack failed: ' + p.stderr); }
   writeFileSync(join(APP, 'package.json'), '{"name":"tu-app","version":"1.0.0","private":true}\n');
-  const tgz = join(PACKS, readdirSync(PACKS).find(f => f.endsWith('.tgz')));
+  const tgz = process.env.TU_TEST_TARBALL || join(PACKS, readdirSync(PACKS).find(f => f.endsWith('.tgz')));
   const i = npm(['install', '--no-audit', '--no-fund', '--offline', tgz], APP);
   if (i.status !== 0) throw new Error('npm install of the tarball failed: ' + i.stderr);
 }

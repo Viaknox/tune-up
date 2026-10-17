@@ -1,6 +1,6 @@
 {
   "name": "agenttuneup",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.0",
   "description": "Agent Tune-Up: check an AI agent from its chats or a test suite, with a strict CI gate. By Viaknox.",
   "type": "module",
   "license": "MIT",

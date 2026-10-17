@@ -1,0 +1,15 @@
+# Paul reviews every change to the gate, its tests, the release path and this file (docs/CLI-PLAN.md S0, PT2).
+# Enforced only when branch protection on main has "Require review from Code Owners" on (docs/RELEASING.md A6).
+/.github/                    @pjpoulose
+/.github/CODEOWNERS          @pjpoulose
+/engine/cli.js               @pjpoulose
+/engine/src/                 @pjpoulose
+/engine/test/                @pjpoulose
+/engine/scripts/             @pjpoulose
+/engine/package.json         @pjpoulose
+/engine/LICENSE              @pjpoulose
+/engine/RELEASE_CHANNEL      @pjpoulose
+/engine/CHANGELOG.md         @pjpoulose
+/docs/CLI-PLAN.md            @pjpoulose
+/docs/RELEASING.md           @pjpoulose
+/.sast-check.toml            @pjpoulose
