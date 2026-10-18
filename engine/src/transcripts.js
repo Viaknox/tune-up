@@ -9,13 +9,26 @@ const AGENT = /^(assistant|bot|ai|agent|grok|chatgpt|claude|gemini|copilot|suppo
 // Only user and agent turns count; system, developer and tool messages are not part of the conversation.
 const roleOf = (r) => /^(user|human|customer)$/i.test(r) ? 'user' : /^(assistant|bot|ai|agent|model)$/i.test(r) ? 'assistant' : null;
 // A message that is not an object (null, a number, a string) has no role, so it is dropped like a system message.
-// Content is text: a string, a number, or a list of parts whose text parts are joined (multimodal exports). Anything
-// else (an object, a list with non-text parts only) cannot be read, and `bad` makes the whole chat unreadable rather than
-// "[object Object]" passing the rule checks (PR #32 review).
+// Content is text: a string, a number, or a list of parts (multimodal exports). Text parts are joined. Tool-call and
+// tool-result parts are dropped like tool turns (the user never typed a tool result), media parts become the placeholder
+// the checks already treat as an action ("[image]"), and an empty list is an empty turn (viaknox #41 review: one tool turn
+// must not throw away a readable chat). Anything else (an object, a part of an unknown type) cannot be read, and `bad`
+// makes the whole chat unreadable rather than "[object Object]" passing the rule checks (PR #32 review).
+// Tool parts are checked before `text`, so a tool result that carries a text field is never read as someone's words.
+const SKIP = /^(?:(?:server_|mcp_)?tool_(?:use|result|call)|web_search_tool_result|function_call(?:_output)?|thinking|redacted_thinking|reasoning)$/;
+const MEDIA = { image: 'image', image_url: 'image', input_image: 'image', file: 'file', input_file: 'file', document: 'file', audio: 'audio', input_audio: 'audio', video: 'video' };
+const partOf = (p) => {
+  if (typeof p === 'string') return p;
+  if (!p || typeof p !== 'object') return null;
+  if (SKIP.test(p.type)) return '';
+  if (typeof p.text === 'string') return p.text;
+  if (p.type === 'refusal' && typeof p.refusal === 'string') return p.refusal;   // the agent's own words (OpenAI)
+  return Object.hasOwn(MEDIA, p.type) ? `[${MEDIA[p.type]}]` : null;
+};
 const textOf = (v) => {
   if (v == null) return '';
   if (typeof v === 'string' || typeof v === 'number') return String(v);
-  if (Array.isArray(v)) { const parts = v.map(p => (typeof p === 'string' ? p : p && typeof p === 'object' && typeof p.text === 'string' ? p.text : null)); return parts.some(x => x !== null) ? parts.filter(x => x !== null).join('\n') : null; }
+  if (Array.isArray(v)) { const parts = v.map(partOf); return v.length && parts.every(x => x === null) ? null : parts.filter(Boolean).join('\n'); }
   return null;
 };
 const norm = (m) => {
