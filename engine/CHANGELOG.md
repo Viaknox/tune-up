@@ -5,6 +5,19 @@ for the approval summary and the GitHub release notes. Every section has a `Comp
 someone upgrading (CLI options, report or gate.json schema, config, gate behaviour), or "none". 0.x rule: any such
 change is a minor bump, never a patch. The plugin and skills have their own changelog in the repository root.
 
+## 0.1.0-rc.2
+
+Chat exports are read more completely. Channel `next`.
+
+- A message with tool-call or tool-result parts (Claude `tool_use`/`tool_result`, OpenAI `function_call`), reasoning parts
+  or server and MCP tool parts no longer makes the whole chat unreadable: those parts are dropped like tool turns. An
+  OpenAI `refusal` part is read as the agent's words. Image, file, audio and video parts become `[image]`, `[file]`,
+  `[audio]` or `[video]`, which the checks treat as something the user did. `content: []` is an empty turn. Object
+  content, or a list of only unknown parts, is still unreadable (#38).
+
+Compatibility: gate behaviour. Chats with those parts that used to count as unreadable (UNDETERMINED) are now judged,
+so a `--gate` run on such exports can now PASS or FAIL. No CLI option, report or gate.json schema changed.
+
 ## 0.1.0-rc.1
 
 The first release built, approved and published by the release workflow (trusted publishing, npm provenance, `cli-v`
