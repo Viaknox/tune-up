@@ -74,13 +74,23 @@ export async function judgeHeld(scrub, text, ask) {
 // The judge varies between calls (calibration v1: 3 of 50 verdicts flipped on a re-run), so each question
 // is asked VOTES times and the probabilities are averaged. Jev costs ~$0.0001 per conversation, so 3x is cheap.
 export const VOTES = 3;
+// The judge could not be reached (timeout, rate limit or server error after retries, bad key) or its reply was unusable.
+// Unsure, never a pass and never a crash; the detail names no error text, so nothing from the request can leak into it.
+export const judgeError = () => ({ bucket: 'rules', code: 'judge:error', ok: false, unsure: true, detail: 'unsure: the judge could not be reached or gave an unusable answer' });
 // Every vote goes through `outbound`, which refuses anything but a Sanitized and makes no call when the text was held;
 // in that case the run gets the single held finding instead of a verdict.
 async function ask(or, sanitized, QS) {
   const questions = Object.fromEntries(Object.entries(QS).map(([k, q]) => [k, { type: 'noul', instructions: q.text }]));
   let rs;
   try { rs = await Promise.all(Array.from({ length: VOTES }, () => outbound(or, 'decide', sanitized, (state) => ({ model: JUDGE_MODEL, state, questions })))); }
-  catch (e) { if (e instanceof HeldBack) return [heldFinding(e.cap)]; throw e; }
+  catch (e) {
+    if (e instanceof HeldBack) return [heldFinding(e.cap)];
+    // outbound's own refusals (raw text instead of a Sanitized) are bugs and stay loud; only the call itself failing is unsure.
+    if (e instanceof TypeError && /^outbound:/.test(e.message)) throw e;
+    return [judgeError()];
+  }
+  // A reply without a number for every question is unusable: unsure, never guessed as a pass (agenttuneup CLI plan R3).
+  if (!rs.every(r => r && r.answers && Object.keys(QS).every(k => r.answers[k] && Number.isFinite(r.answers[k].noul) && r.answers[k].noul >= 0 && r.answers[k].noul <= 1))) return [judgeError()];
   return Object.entries(QS).map(([k, q]) => {
     const p = rs.reduce((a, r) => a + r.answers[k].noul, 0) / rs.length;
     const yes = p >= 0.5, unsure = p > 0.35 && p < 0.65;

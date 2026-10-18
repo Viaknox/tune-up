@@ -27,11 +27,30 @@ const NESTED = /\)\s*(?:[+*?]|\{\d)/;
 export function validateSuite(suite) {
   const errs = [];
   if (!Array.isArray(suite.cases) || !suite.cases.length) return ['The suite has no test cases. Add at least one case to "cases".'];
+  const seen = new Set();
   suite.cases.forEach((c, i) => {
+    // A case that is not an object cannot be checked further (`in` would throw on a string): report it and move on.
+    if (!c || typeof c !== 'object' || Array.isArray(c)) { errs.push(`case ${i + 1}: must be an object with "id" and "turns"`); return; }
     const at = `case ${i + 1}${c && c.id ? ` (${c.id})` : ''}`;
     if (!c || typeof c.id !== 'string' || !c.id) errs.push(`${at}: needs an "id"`);
+    // Case ids name the runs in the report and the gate; two cases with one id would merge into one (PR #32 review).
+    else if (seen.has(c.id)) errs.push(`${at}: the id "${c.id}" is used by another case; every case needs its own id`);
+    else seen.add(c.id);
+    // Tool expectations must have the documented shape: a string would be read letter by letter (PR #32 review).
+    // "expect" must be an object when given; anything else is a config error, not a crash (PR #32 review).
+    const raw = c && c.expect;
+    if (raw !== undefined && (raw === null || typeof raw !== 'object' || Array.isArray(raw))) errs.push(`${at}: "expect" must be an object`);
+    const e = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    if ('must_call' in e && (typeof e.must_call !== 'string' || !e.must_call)) errs.push(`${at}: "must_call" must be one tool name`);
+    if ('must_not_call' in e && (!Array.isArray(e.must_not_call) || !e.must_not_call.length || !e.must_not_call.every(t => typeof t === 'string' && t))) errs.push(`${at}: "must_not_call" must be a list of tool names`);
     if (!c || !Array.isArray(c.turns) || !c.turns.length || !c.turns.every(t => typeof t === 'string')) errs.push(`${at}: "turns" must be a list of user messages`);
-    for (const p of (c && c.expect && c.expect.must_say_any) || []) {
+    // Every other documented field is shape-checked too, so a malformed suite is a config error before anything is sent,
+    // never a crash after the agent and judge calls (PR #32 review).
+    if (c && 'intent' in c && typeof c.intent !== 'string') errs.push(`${at}: "intent" must be text`);
+    const words = (k) => { if (k in e && (!Array.isArray(e[k]) || !e[k].length || !e[k].every(x => typeof x === 'string' && x))) { errs.push(`${at}: "${k}" must be a list of words or patterns`); return false; } return true; };
+    const sayOk = words('must_say_any'); words('must_not_say');
+    for (const k of ['refuse', 'ask_clarify']) if (k in e && typeof e[k] !== 'boolean') errs.push(`${at}: "${k}" must be true or false`);
+    for (const p of (sayOk && e.must_say_any) || []) {
       try { new RegExp(p, 'i'); } catch { errs.push(`${at}: must_say_any pattern ${JSON.stringify(p)} is not a valid regex`); continue; }
       if (String(p).length > 200 || NESTED.test(String(p))) errs.push(`${at}: must_say_any pattern ${JSON.stringify(p)} is too complex (nested repeats); use a simpler one`);
     }

@@ -1,9 +1,9 @@
-# From SathiaAI/sast-check templates/sast.yml (CLI plan S1).
-# Then make "sast-check / scan" a required status check in branch protection.
+# sast-check (docs/CLI-PLAN.md S1, PG2, PT5): a security scan on every pull request.
+# Make "sast-check / scan" a required check on main (docs/RELEASING.md step A6).
 name: sast-check
 
 on:
-  pull_request:          # never use pull_request_target for this: it would run PR code with secrets
+  pull_request:          # never pull_request_target: that would run PR code with secrets
 
 permissions:
   contents: read
@@ -14,16 +14,16 @@ concurrency:
 
 jobs:
   scan:
-    name: scan
+    name: sast-check / scan   # the check name branch protection requires (a bare "scan" is ambiguous)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
-      pull-requests: write   # sticky PR comment (skipped automatically for fork PRs)
+      pull-requests: write   # one sticky PR comment (skipped automatically for fork PRs)
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      # Pin to a full commit SHA of sast-check, never a branch or tag.
-      - uses: Viaknox/sast-check@890048d102e5eaa16cc7f7cac0bf7a06442d0a74 # main 2026-10-17 (PR #32)
+      # Pinned to a full commit SHA, never a branch or tag: the action runs with this PR's token.
+      - uses: Viaknox/sast-check@890048d102e5eaa16cc7f7cac0bf7a06442d0a74   # main, 2026-10-17

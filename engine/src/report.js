@@ -32,7 +32,7 @@ export function buildReport({ suite, instructions, adapter, runs, judgeModel, ev
   // Tokens and tool calls are unknown (null) for agents that don't expose them, never shown as 0.
   const known = (k) => runs.every(r => r[k] !== null && r[k] !== undefined);
   wb.usage = { avg_seconds: +(waste.ms / runs.length / 1000).toFixed(1), avg_tokens: known('tokens') ? Math.round(waste.tokens / runs.length) : null, avg_tool_calls: known('toolCalls') ? +(waste.toolCalls / runs.length).toFixed(1) : null };
-  const byCase = {};
+  const byCase = Object.create(null);   // case ids are user text: "__proto__" or "constructor" must be plain keys (PR #32 review)
   for (const r of runs) (byCase[r.case] ||= []).push(r.passed);
   const inconsistent = Object.entries(byCase).filter(([, v]) => v.some(Boolean) && v.some(x => !x)).map(([k]) => k);
   const passRate = Math.round(100 * runs.filter(r => r.passed).length / runs.length);
@@ -49,7 +49,7 @@ export function buildReport({ suite, instructions, adapter, runs, judgeModel, ev
 // What a tune-up broke: cases that passed every run before and fail a run after, and any rules failure that is new.
 /** @param {any} before @param {any} after */
 export function regressions(before, after) {
-  const passedAll = (rep) => { const m = {}; for (const r of rep.runs) m[r.case] = (m[r.case] ?? true) && r.passed; return m; };
+  const passedAll = (rep) => { const m = Object.create(null); for (const r of rep.runs) m[r.case] = (m[r.case] ?? true) && r.passed; return m; };
   const b = passedAll(before), a = passedAll(after);
   const broke = Object.keys(b).filter(c => b[c] && a[c] === false);
   // Rules failures are compared one by one (case, rule and what was violated, counted), so a second leak in a case

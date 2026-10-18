@@ -6,14 +6,59 @@ on:
   push:
   pull_request:
 
+# Read-only: no job here pushes, comments or publishes (zizmor excessive-permissions).
+permissions:
+  contents: read
+
 jobs:
-  engine:
+  engine-matrix:
+    name: engine (node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['20.12', '22']   # the oldest supported Node runs the full suite too (PR #32 review)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683   # v4.2.2
         with:
           persist-credentials: false   # the job never pushes (PR #16 review)
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4.4.0
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
       - run: cd engine && npm test
+      # The CI gate's own code must have no surviving mutants: tests that pass whatever the code does fail here
+      # (agenttuneup CLI plan T7).
+      - if: matrix.node == '22'
+        run: cd engine && npm run mutate:gate
+
+  # One stable check named "engine" for branch protection: passes only when every test cell and every packed-install
+  # smoke cell passed (PR #32 review). `always()` makes
+  # it run (and fail) even when a cell failed, so a failed or skipped cell can never count as passing (PR #32 review).
+  engine:
+    if: always()
+    needs: [engine-matrix, pack-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          TESTS: ${{ needs.engine-matrix.result }}
+          SMOKE: ${{ needs.pack-smoke.result }}
+        run: '[ "$TESTS" = "success" ] && [ "$SMOKE" = "success" ] || { echo "engine-matrix: $TESTS, pack-smoke: $SMOKE"; exit 1; }'
+
+  # Installs the packed package in a clean folder and runs it through npx on every OS and supported Node outside teams
+  # use (docs/CLI-PLAN.md P6): exit codes, consent, no network without it, key hygiene, golden fixtures.
+  pack-smoke:
+    name: pack-smoke (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ['20.12', '22']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683   # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+      - working-directory: engine
+        run: node --test test/cli-package.test.js

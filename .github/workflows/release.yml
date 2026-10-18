@@ -1,0 +1,310 @@
+# Releases the agenttuneup CLI (docs/CLI-PLAN.md S6). A release starts as a release PR that changes
+# engine/package.json's version (plus engine/CHANGELOG.md and engine/RELEASE_CHANNEL). When Paul merges it, this
+# workflow builds and tests the exact tarball, waits in the protected "release" environment for his Approve click,
+# publishes it to npm with trusted publishing (no npm token anywhere), verifies integrity, provenance and channel on the
+# registry, and only then creates the cli-vX.Y.Z tag and a pre-release GitHub release. Every step is safe to re-run.
+# The plugin's own v* releases are separate and untouched.
+#
+# One-time setup (Paul): see docs/RELEASING.md. Version 0.1.0-rc.0 is the npm bootstrap (S8): this workflow builds and
+# tests its tarball for Paul to publish by hand, and never publishes or tags it.
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths: ['engine/package.json', 'engine/RELEASE_CHANNEL']
+
+permissions: {}
+
+# Releases run one at a time and are never dropped: without `queue: max` GitHub keeps only one pending run per group
+# and cancels the rest (GitHub changelog 2026-05-07, "concurrency groups now allow larger queues").
+concurrency:
+  group: agenttuneup-release
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  prepare:
+    name: Build and test the release tarball
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      channel: ${{ steps.meta.outputs.channel }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      release: ${{ steps.meta.outputs.release }}
+      integrity: ${{ steps.pack.outputs.integrity }}
+      tarball: ${{ steps.pack.outputs.tarball }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683   # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4.4.0
+        with:
+          node-version: '22.14'
+      - name: Read version and channel; decide whether this push is a release
+        id: meta
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./engine/package.json').version")"
+          channel="$(tr -d '[:space:]' < engine/RELEASE_CHANNEL)"
+          echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-(rc|beta)\.[0-9]+)?$' || { echo "::error::version $version is not X.Y.Z or X.Y.Z-rc.N / -beta.N"; exit 1; }
+          case "$channel" in next|latest) ;; *) echo "::error::engine/RELEASE_CHANNEL must be next or latest, not '$channel'"; exit 1;; esac
+          prerelease=false; case "$version" in *-*) prerelease=true;; esac
+          if [ "$prerelease" = true ] && [ "$channel" = latest ]; then echo "::error::a -rc/-beta version cannot go to latest"; exit 1; fi
+          [ "$(node -p "require('./engine/package.json').private === undefined")" = true ] || { echo "::error::engine/package.json is marked private"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::commit is not on main"; exit 1; }
+          before=""
+          if [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then before="$(git show "$BEFORE:engine/package.json" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).version))")"; fi
+          release=true
+          if [ "$version" = "$before" ]; then release=false; echo "Version unchanged ($version): nothing to release."; fi
+          if [ "$version" = "0.1.0-rc.0" ]; then release=false; echo "0.1.0-rc.0 is the npm bootstrap: Paul publishes this tarball by hand (docs/RELEASING.md)."; fi
+          { echo "version=$version"; echo "channel=$channel"; echo "prerelease=$prerelease"; echo "release=$release"; } >> "$GITHUB_OUTPUT"
+      - name: Full test suite and gate mutation check on this commit
+        working-directory: engine
+        run: npm test && npm run mutate:gate
+      - name: Pack, check the file allowlist, write the approval summary
+        id: pack
+        working-directory: engine
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          CHANNEL: ${{ steps.meta.outputs.channel }}
+          RELEASE: ${{ steps.meta.outputs.release }}
+        run: |
+          set -euo pipefail
+          mkdir -p ../dist && tgz="$(npm pack --silent --pack-destination ../dist)" && file="../dist/$tgz"
+          # List once and test the captured text: `tar | grep -q` exits 141 under pipefail when grep stops early (PR #33 review).
+          list="$(tar -tzf "$file")"
+          bad="$(printf '%s\n' "$list" | sed 's#^package/##' | grep -Ev '^(cli\.js|package\.json|README\.md|LICENSE|src/[A-Za-z0-9_-]+\.js)$' || true)"
+          [ -z "$bad" ] || { echo "::error::files outside the allowlist: $bad"; exit 1; }
+          grep -qx 'package/LICENSE' <<< "$list" || { echo "::error::LICENSE missing from the package"; exit 1; }
+          integrity="sha512-$(openssl dgst -sha512 -binary "$file" | base64 -w0)"
+          compat="$(node scripts/release-notes.mjs "$VERSION" --compatibility)"
+          # Release notes are made here, without any token, so the tag job never runs repository code (PR #33 review).
+          mkdir -p ../notes && node scripts/release-notes.mjs "$VERSION" > ../notes/notes.md
+          { echo "tarball=$tgz"; echo "integrity=$integrity"; } >> "$GITHUB_OUTPUT"
+          {
+            echo "## agenttuneup $VERSION"
+            echo
+            echo "| | |"; echo "|---|---|"
+            echo "| Version | \`$VERSION\` |"; echo "| npm channel (dist-tag) | \`$CHANNEL\` |"; echo "| Commit | \`$GITHUB_SHA\` |"
+            echo "| Will publish | $RELEASE |"; echo "| Tarball integrity | \`$integrity\` |"
+            echo; echo "**Compatibility:** $compat"; echo
+            echo "### Files (sha256)"; echo; echo '```'
+            mkdir -p ../dist/x && tar -xzf "$file" -C ../dist/x && (cd ../dist/x/package && find . -type f | sort | xargs sha256sum)
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4.6.2
+        with:
+          name: agenttuneup-tarball
+          path: dist/${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+          overwrite: true   # a re-run of prepare replaces its own partial upload (PR #33 review)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4.6.2
+        with:
+          name: agenttuneup-release-notes
+          path: notes/notes.md
+          if-no-files-found: error
+          overwrite: true   # a re-run of prepare replaces its own partial upload (PR #33 review)
+
+  # The exact tarball, installed and run on every supported OS and Node (docs/CLI-PLAN.md P6, PT8).
+  smoke:
+    name: smoke (${{ matrix.os }}, node ${{ matrix.node }})
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ['20.12', '22']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683   # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093   # v4.3.0
+        with:
+          name: agenttuneup-tarball
+          path: dist
+      - name: Packaged CLI tests against the release tarball
+        working-directory: engine
+        shell: bash
+        env:
+          TARBALL: ${{ needs.prepare.outputs.tarball }}
+        run: TU_TEST_TARBALL="$GITHUB_WORKSPACE/dist/$TARBALL" node --test test/cli-package.test.js
+
+  publish:
+    name: Publish to npm (after Paul approves)
+    needs: [prepare, smoke]
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    # Waits for Paul's Approve click. The environment is limited to main, and npm's trusted publisher names this repo,
+    # this file and this environment, so nothing else can publish.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write   # only this job may ask GitHub for the identity npm trusts
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4.4.0
+        with:
+          node-version: '22.14'
+      - name: npm with trusted publishing (11.5.1 or later)
+        run: npm install -g npm@11.5.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093   # v4.3.0
+        with:
+          name: agenttuneup-tarball
+          path: dist
+      - name: Publish the tested tarball, or resume if this exact tarball is already on npm
+        id: publish
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+          INTEGRITY: ${{ needs.prepare.outputs.integrity }}
+          TARBALL: ${{ needs.prepare.outputs.tarball }}
+          GH_TOKEN: ${{ github.token }}   # contents: read only, to re-read main
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          file="./dist/$TARBALL"   # npm reads dist/x.tgz as a GitHub shorthand; a local tarball needs ./ (PR #33 review)
+          got="sha512-$(openssl dgst -sha512 -binary "$file" | base64 -w0)"
+          [ "$got" = "$INTEGRITY" ] || { echo "::error::downloaded tarball differs from the tested one"; exit 1; }
+          # Read the channels and fail closed: a lookup error must never look like "no channel yet" (PR #33 review).
+          # The package always exists here, because the bootstrap 0.1.0-rc.0 is published by hand first.
+          tags="$(npm view agenttuneup dist-tags --json)" || { echo "::error::could not read the npm channels; stopping instead of guessing. Re-run when npm is reachable."; exit 1; }
+          current="$(TAGS="$tags" node -e 'const t = JSON.parse(process.env.TAGS); const v = t && t[process.env.CHANNEL]; process.stdout.write(typeof v === "string" ? v : "")')"
+          newer=no
+          if [ -n "$current" ] && [ "$current" != "$VERSION" ]; then
+            newer="$(CUR="$current" NEW="$VERSION" node -e '
+              const p = (v) => { const m = /^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)\.(\d+))?$/.exec(v); if (!m) throw new Error("bad version " + v); return m; };
+              const a = p(process.env.CUR), b = p(process.env.NEW);
+              let c = 0; for (const i of [1, 2, 3]) if (!c) c = Number(a[i]) - Number(b[i]);
+              if (!c) c = a[4] === undefined ? (b[4] === undefined ? 0 : 1) : b[4] === undefined ? -1 : a[4] < b[4] ? -1 : a[4] > b[4] ? 1 : Number(a[5]) - Number(b[5]);
+              console.log(c > 0 ? "yes" : "no");')"
+          fi
+          if onnpm="$(npm view "agenttuneup@$VERSION" dist.integrity 2>/dev/null)" && [ -n "$onnpm" ]; then
+            [ "$onnpm" = "$INTEGRITY" ] || { echo "::error::agenttuneup@$VERSION is already on npm with a different tarball; never reuse a version"; exit 1; }
+            # Already public: finish verification and tagging even if a newer release has since moved the channel on,
+            # and leave that newer channel where it is (PR #33 review).
+            echo "agenttuneup@$VERSION is already on npm with this exact tarball: resuming at verification."
+          else
+            # A re-run of an older release must never move the channel back past a newer one (PR #33 review).
+            [ "$newer" = no ] || { echo "::error::$CHANNEL already points at $current, newer than $VERSION; refusing to move it back"; exit 1; }
+            # main must still ask for this exact release: a revert or a later release PR merged while this run waited
+            # for approval supersedes it (ancestry alone cannot tell). Fails closed if main cannot be read (PR #33 review).
+            mainver="$(gh api "repos/$REPO/contents/engine/package.json?ref=main" -H 'Accept: application/vnd.github.raw' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).version)))')" || { echo "::error::could not read engine/package.json on main; stopping"; exit 1; }
+            mainchan="$(gh api "repos/$REPO/contents/engine/RELEASE_CHANNEL?ref=main" -H 'Accept: application/vnd.github.raw' | tr -d '[:space:]')" || { echo "::error::could not read engine/RELEASE_CHANNEL on main; stopping"; exit 1; }
+            [ "$mainver" = "$VERSION" ] && [ "$mainchan" = "$CHANNEL" ] || { echo "::error::main now asks for $mainver on '$mainchan', not $VERSION on '$CHANNEL': this release was superseded; not publishing"; exit 1; }
+            npm publish "$file" --tag "$CHANNEL" --access public --provenance
+          fi
+          echo "channel_moved_on=$newer" >> "$GITHUB_OUTPUT"
+      - name: Verify integrity, provenance and channel on the registry
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+          INTEGRITY: ${{ needs.prepare.outputs.integrity }}
+          MOVED_ON: ${{ steps.publish.outputs.channel_moved_on }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            onnpm="$(npm view "agenttuneup@$VERSION" dist.integrity 2>/dev/null || true)"
+            prov="$(npm view "agenttuneup@$VERSION" dist.attestations.provenance.predicateType 2>/dev/null || true)"
+            tag="$(npm view agenttuneup "dist-tags.$CHANNEL" 2>/dev/null || true)"
+            # The channel must point at this version, unless a newer release already moved it on (then leave it there).
+            # Rechecked on every try: the channel must still be newer, never older or unreadable (PR #33 review).
+            chan=no
+            if [ "$tag" = "$VERSION" ]; then chan=ok
+            elif [ "$MOVED_ON" = yes ] && [ -n "$tag" ]; then
+              newer="$(CUR="$tag" NEW="$VERSION" node -e '
+                const p = (v) => { const m = /^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)\.(\d+))?$/.exec(v); if (!m) throw new Error("bad version " + v); return m; };
+                const a = p(process.env.CUR), b = p(process.env.NEW);
+                let c = 0; for (const i of [1, 2, 3]) if (!c) c = Number(a[i]) - Number(b[i]);
+                if (!c) c = a[4] === undefined ? (b[4] === undefined ? 0 : 1) : b[4] === undefined ? -1 : a[4] < b[4] ? -1 : a[4] > b[4] ? 1 : Number(a[5]) - Number(b[5]);
+                console.log(c > 0 ? "yes" : "no");')" || newer=no
+              if [ "$newer" = yes ]; then chan=ok; fi
+            fi
+            if [ "$onnpm" = "$INTEGRITY" ] && [ "$prov" = "https://slsa.dev/provenance/v1" ] && [ "$chan" = ok ]; then echo "Verified."; exit 0; fi
+            sleep 10
+          done
+          echo "::error::registry check failed: integrity '$onnpm', provenance '$prov', $CHANNEL -> '$tag'"; exit 1
+      - name: Verify the provenance came from this repository, release.yml and this commit
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Signatures first: npm checks the registry signature and the provenance attestation cryptographically.
+          work="$(mktemp -d)" && cd "$work" && npm init -y > /dev/null
+          npm install "agenttuneup@$VERSION" --ignore-scripts --no-audit --no-fund > /dev/null
+          npm audit signatures
+          # Then identity: a published copy of the same bytes from another workflow or commit must never be tagged here.
+          att="$(curl -fsS "https://registry.npmjs.org/-/npm/v1/attestations/agenttuneup@$VERSION")" || { echo "::error::could not read the attestations"; exit 1; }
+          ATT="$att" node -e '
+            const want = { repo: "https://github.com/" + process.env.REPO, path: ".github/workflows/release.yml", sha: process.env.GITHUB_SHA };
+            const a = (JSON.parse(process.env.ATT).attestations || []).find(x => x.predicateType === "https://slsa.dev/provenance/v1");
+            if (!a) { console.log("::error::no SLSA provenance attestation"); process.exit(1); }
+            const st = JSON.parse(Buffer.from(a.bundle.dsseEnvelope.payload, "base64").toString("utf8"));
+            const def = st.predicate.buildDefinition, wf = def.externalParameters.workflow;
+            const commit = (def.resolvedDependencies || []).map(d => d && d.digest && d.digest.gitCommit).find(Boolean);
+            const got = { repo: wf.repository, path: wf.path, sha: commit };
+            for (const k of Object.keys(want)) if (got[k] !== want[k]) { console.log(`::error::provenance ${k} is ${got[k]}, expected ${want[k]}`); process.exit(1); }
+            console.log("Provenance: " + want.repo + " " + want.path + " @ " + want.sha);'
+
+  tag:
+    name: Tag cli-v and create the GitHub release (after npm is verified)
+    needs: [prepare, publish]
+    runs-on: ubuntu-latest
+    # Holds only the release App's key; limited to main. The App may create cli-v* tags (tag ruleset bypass) and
+    # nothing can update or delete them, so a published tag never moves.
+    environment: release-tag
+    permissions: {}
+    steps:
+      - name: Mint a 1-hour token for the release App (contents write, this repo only)
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510   # v3.3.0
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      # No checkout here: this job holds a contents-write token, so it runs no repository code (PR #33 review).
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093   # v4.3.0
+        with:
+          name: agenttuneup-release-notes
+          path: notes
+      - name: Create (or verify) the tag and the pre-release
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          tag="cli-v$VERSION"
+          onmain() { s="$(gh api "repos/$REPO/compare/$GITHUB_SHA...main" --jq .status)"; [ "$s" = ahead ] || [ "$s" = identical ]; }
+          onmain || { echo "::error::approved commit $GITHUB_SHA is no longer on main"; exit 1; }
+          if existing="$(gh api "repos/$REPO/git/ref/tags/$tag" --jq '.object.type + " " + .object.sha' 2>/dev/null)"; then
+            [ "$existing" = "commit $GITHUB_SHA" ] || { echo "::error::$tag already exists and points at $existing, not $GITHUB_SHA"; exit 1; }
+            echo "$tag already points at the approved commit."
+          else
+            onmain || { echo "::error::approved commit left main"; exit 1; }
+            gh api -X POST "repos/$REPO/git/refs" -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA" > /dev/null
+          fi
+          pre=true; [ "$PRERELEASE" = false ] && [ "$CHANNEL" = latest ] && pre=false
+          if rel="$(gh api "repos/$REPO/releases/tags/$tag" --jq '.prerelease|tostring' 2>/dev/null)"; then
+            [ "$rel" = "$pre" ] || { echo "::error::release $tag exists with prerelease=$rel, expected $pre"; exit 1; }
+            echo "Release $tag already exists: kept."
+          else
+            cp notes/notes.md notes.md
+            printf '\nnpm: `npm install agenttuneup@%s` (channel `%s`)\n' "$VERSION" "$CHANNEL" >> notes.md
+            # make_latest false: the repo's Latest release stays the plugin's.
+            gh api -X POST "repos/$REPO/releases" -f tag_name="$tag" -f name="agenttuneup $VERSION" -F prerelease="$pre" -f make_latest=false -F body=@notes.md > /dev/null
+          fi

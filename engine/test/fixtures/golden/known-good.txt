@@ -1,0 +1,5 @@
+User: Hi, what time do you open on Saturdays?
+Bot: We open at 9am on Saturdays and close at 5pm.
+---
+User: Do you have vegetarian options?
+Bot: Yes. About half of our menu is vegetarian, and every dish is labelled.
