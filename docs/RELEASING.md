@@ -49,9 +49,9 @@ Do these in order. Each one is a few clicks.
    **Turn on the Code Owner rule only once Claude's PRs are opened by the `viaknox-claude` App** (S0a): GitHub never
    lets you approve a PR you authored, so while PRs are opened under your account that rule would block every one of
    them. Leave *Require approval of the most recent reviewable push* off: Claude pushes commits with your account,
-   so you are the last pusher on every Claude PR. *Require extra approval for unattributed changes* is under test
-   (2026-10-18): if it stops you approving a bot-opened PR that carries Claude's commits, turn it off; in a one-person
-   repository nobody else can give that extra approval. Check: open a test PR that touches `.github/` and confirm it
+   so you are the last pusher on every Claude PR. *Require extra approval for unattributed changes* can stay on:
+   tested 2026-10-18 on PR #37 (opened by the App, commits pushed by Claude under your account), and you could still
+   approve. If a future PR ever refuses your approval, check this setting first. Check: open a test PR that touches `.github/` and confirm it
    shows "Review required" from you and both checks as required.
 
 ### B. npm bootstrap (S8): the first publish is yours
