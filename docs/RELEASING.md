@@ -29,13 +29,14 @@ Do these in order. Each one is a few clicks.
 
 1. **Environments → New environment `release`.** Required reviewers: you. Deployment branches and tags: *Selected
    branches* → `main`. No secrets.
-2. **A release GitHub App** (separate from `viaknox-claude`). Your profile → Settings → Developer settings → GitHub
-   Apps → New. Name `viaknox-release`, no webhook, Repository permissions: **Contents: Read and write**, nothing else.
+2. **A release GitHub App** (separate from `viaknox-claude`), owned by the organization: Viaknox org → Settings →
+   Developer settings → GitHub Apps → New (https://github.com/organizations/Viaknox/settings/apps). Name `viaknox-release`, no webhook, Repository permissions: **Contents: Read and write**, nothing else.
    Create it, note its App ID, **Generate a private key**, and install it on **Viaknox/tune-up only**.
 3. **Environments → New environment `release-tag`.** No reviewers. Deployment branches: `main` only. Add variable
    `RELEASE_APP_ID` (the App ID) and secret `RELEASE_APP_PRIVATE_KEY` (the whole `.pem` file). Delete the downloaded
    `.pem` afterwards.
-4. **Rules → Rulesets → New tag ruleset `cli-v create`.** **Enforcement status: Active** (a new ruleset starts as
+4. **Rules → Rulesets → New ruleset ▾ → New tag ruleset `cli-v create`.** Check the page says *Target tags*; a branch
+   ruleset with the same name protects nothing here (this happened on 2026-10-17). **Enforcement status: Active** (a new ruleset starts as
    *Disabled*, which enforces nothing). Target tags matching `cli-v*`. Rule: *Restrict creations*. Bypass list: the
    `viaknox-release` App only.
 5. **New tag ruleset `cli-v immutable`.** **Enforcement status: Active.** Target `cli-v*`. Rules: *Restrict updates*
@@ -44,11 +45,14 @@ Do these in order. Each one is a few clicks.
 6. **Branch protection on `main`** (docs/CLI-PLAN.md S0): require a pull request; require the status checks `engine`
    and `sast-check / scan` (each appears after it has run once on a PR); block force pushes and deletions; turn on
    *Do not allow bypassing the above settings*; *Require review from Code Owners* (`.github/CODEOWNERS` names you for
-   the gate, tests, workflows and release files); *Dismiss stale pull request approvals when new commits are pushed*
-   and *Require approval of the most recent reviewable push*. **Turn on the Code Owner rule only once Claude's PRs
-   are opened by the `viaknox-claude` App** (S0a): GitHub never lets you approve a PR you authored, so while PRs
-   are opened under your account that rule would block every one of them. Check: open a test PR that touches
-   `.github/` and confirm it shows "Review required" from you and both checks as required.
+   the gate, tests, workflows and release files); *Dismiss stale pull request approvals when new commits are pushed*.
+   **Turn on the Code Owner rule only once Claude's PRs are opened by the `viaknox-claude` App** (S0a): GitHub never
+   lets you approve a PR you authored, so while PRs are opened under your account that rule would block every one of
+   them. Leave *Require approval of the most recent reviewable push* off: Claude pushes commits with your account,
+   so you are the last pusher on every Claude PR. *Require extra approval for unattributed changes* is under test
+   (2026-10-18): if it stops you approving a bot-opened PR that carries Claude's commits, turn it off; in a one-person
+   repository nobody else can give that extra approval. Check: open a test PR that touches `.github/` and confirm it
+   shows "Review required" from you and both checks as required.
 
 ### B. npm bootstrap (S8): the first publish is yours
 
@@ -59,8 +63,11 @@ npm can only set up trusted publishing for a package that already exists.
    the tarball but does not publish (that version is the bootstrap). Download the `agenttuneup-tarball` artifact and
    unzip it. Check its integrity against the run summary:
    `node -e "const c=require('crypto');console.log('sha512-'+c.createHash('sha512').update(require('fs').readFileSync('agenttuneup-0.1.0-rc.0.tgz')).digest('base64'))"`
-3. Publish **that exact file**: `npm publish agenttuneup-0.1.0-rc.0.tgz --tag next --access public` (npm asks for your
-   2FA code).
+3. Publish **that exact file**: `npm publish ./agenttuneup-0.1.0-rc.0.tgz --tag next --access public` (npm asks for your
+   2FA code; the leading `./` makes npm read a local file). The artifact downloads as a zip: unzip it first. If npm
+   stages it (staged publishing), `npm view agenttuneup` shows only a public placeholder `0.0.0-stage`: approve the
+   staged version on npmjs.com → Staged Packages (or `npm stage approve <id>`) with 2FA, then check
+   `npm view agenttuneup@0.1.0-rc.0 dist.integrity` equals the run's tarball integrity. Done 2026-10-17.
 4. npmjs.com → agenttuneup → Settings → **Trusted publishing → GitHub Actions**: organization `Viaknox`, repository
    `tune-up`, workflow `release.yml`, environment `release`. **Allow direct publishing** for this configuration: since
    2026-09-03 a new configuration can only stage by default, and this workflow publishes directly after your GitHub
@@ -75,8 +82,8 @@ npm can only set up trusted publishing for a package that already exists.
    create or confirm the `viaknox` npm organization (this also reserves the `@viaknox` scope) and a team in it, for
    example `viaknox:release`, with you in it (add a second person with 2FA when there is one). Then grant the package:
    `npm access grant read-write viaknox:release agenttuneup` (or the package's Settings → access page on npmjs.com).
-   Check with `npm access list collaborators agenttuneup` (the team shows `read-write`) and
-   `npm access list packages viaknox:release` (lists `agenttuneup`). If npm refuses the grant for the unscoped name,
+   Check on npmjs.com → viaknox → Teams → release → Packages (`agenttuneup`, Read and write); the CLI
+   `npm access list collaborators agenttuneup` lists only users unless you are signed in, so it can miss the team. If npm refuses the grant for the unscoped name,
    stop and tell Claude: do not fall back to a personal second owner without deciding it on purpose.
 
 Steps 1–3, 5 and 6 can be done any time; step 4 goes right before the first workflow release (see its timing note).
