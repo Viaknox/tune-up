@@ -5,6 +5,18 @@ for the approval summary and the GitHub release notes. Every section has a `Comp
 someone upgrading (CLI options, report or gate.json schema, config, gate behaviour), or "none". 0.x rule: any such
 change is a minor bump, never a patch. The plugin and skills have their own changelog in the repository root.
 
+## 0.1.0-rc.3
+
+Chats are never graded on part of a message. Channel `next`.
+
+- A message that mixes readable text with a content part the parser does not know (a new provider part type, or a
+  `null` entry) now makes the whole chat unreadable instead of being graded on the readable text alone. Known tool and
+  reasoning parts are still dropped, and media still becomes `[image]`, `[file]`, `[audio]` or `[video]` (#41).
+
+Compatibility: gate behaviour. Chats with an unknown content part next to readable text, which rc.2 judged, are now
+unreadable, so a `--gate` run on such exports returns UNDETERMINED (exit 3) and lists them. No CLI option, report or
+gate.json schema changed.
+
 ## 0.1.0-rc.2
 
 Chat exports are read more completely. Channel `next`.
