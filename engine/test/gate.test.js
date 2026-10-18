@@ -638,6 +638,16 @@ test('viaknox #41 review: tool-call, media and empty parts do not throw away a r
   assert.deepEqual(c[2].map(m => m.content).slice(0, 4), ['[image]', '[image]', '[file]', '[audio]'], 'media becomes the placeholder the checks already treat as an action');
   assert.deepEqual(checkConversation(c[2]).filter(f => f.code === 'repeated_ask'), [], 'two images in a row are not the user asking again');
   assert.deepEqual(c[3].map(m => m.content), ['When do you open?', 'We open at 9am.']);
+  const more = [q, { role: 'assistant', content: [{ type: 'thinking', thinking: 'hmm' }, { type: 'redacted_thinking', data: 'x' }, { type: 'reasoning', summary: [] }, { type: 'server_tool_use', name: 'web_search' }, { type: 'web_search_tool_result', content: [] }, { type: 'mcp_tool_use' }, { type: 'mcp_tool_result' }, { type: 'function_call_output', output: 'x' }] },
+    { role: 'user', content: [{ type: 'document', source: {} }, { type: 'file', file: {} }, { type: 'video' }] }, { role: 'assistant', content: [{ type: 'refusal', refusal: 'I cannot share that.' }] }];
+  const m = parseTranscripts(JSON.stringify([more]));
+  assert.deepEqual(m[0].map(x => x.content), ['When do you open?', '[file]\n[file]\n[video]', 'I cannot share that.'], 'reasoning and server tool parts are dropped; a refusal is the agent speaking');
+  // A tool part that carries a text field is still a tool part, never the user's or agent's words.
+  const t = parseTranscripts(JSON.stringify([[q, { role: 'user', content: [{ type: 'tool_result', text: 'SECRET' }] }, { role: 'assistant', content: [{ type: 'tool_use', text: 'x' }] }, a]]));
+  assert.deepEqual(t[0].map(x => x.content), ['When do you open?', 'We open at 9am.']);
+  // Still fail closed: object content, a list of only unknown parts, and a chat whose only user turn was a tool result.
+  const r = parseTranscripts(JSON.stringify([[q, { role: 'assistant', content: { a: 1 } }], [q, { role: 'assistant', content: [{}, { type: 'mystery' }] }], [{ role: 'user', content: [{ type: 'tool_result', content: 'x' }] }, a]]));
+  assert.deepEqual(r.rejected, [1, 2, 3]); assert.equal(r.length, 0);
 });
 
 test('PR #32 review: every npx command in the README pins the exact package version', () => {

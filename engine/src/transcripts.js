@@ -14,13 +14,15 @@ const roleOf = (r) => /^(user|human|customer)$/i.test(r) ? 'user' : /^(assistant
 // the checks already treat as an action ("[image]"), and an empty list is an empty turn (viaknox #41 review: one tool turn
 // must not throw away a readable chat). Anything else (an object, a part of an unknown type) cannot be read, and `bad`
 // makes the whole chat unreadable rather than "[object Object]" passing the rule checks (PR #32 review).
-const SKIP = /^(tool_use|tool_result|tool_call|function_call|function_call_output|thinking|redacted_thinking)$/;
-const MEDIA = { image: 'image', image_url: 'image', input_image: 'image', file: 'file', input_file: 'file', document: 'file', audio: 'audio', input_audio: 'audio' };
+// Tool parts are checked before `text`, so a tool result that carries a text field is never read as someone's words.
+const SKIP = /^(?:(?:server_|mcp_)?tool_(?:use|result|call)|web_search_tool_result|function_call(?:_output)?|thinking|redacted_thinking|reasoning)$/;
+const MEDIA = { image: 'image', image_url: 'image', input_image: 'image', file: 'file', input_file: 'file', document: 'file', audio: 'audio', input_audio: 'audio', video: 'video' };
 const partOf = (p) => {
   if (typeof p === 'string') return p;
   if (!p || typeof p !== 'object') return null;
-  if (typeof p.text === 'string') return p.text;
   if (SKIP.test(p.type)) return '';
+  if (typeof p.text === 'string') return p.text;
+  if (p.type === 'refusal' && typeof p.refusal === 'string') return p.refusal;   // the agent's own words (OpenAI)
   return Object.hasOwn(MEDIA, p.type) ? `[${MEDIA[p.type]}]` : null;
 };
 const textOf = (v) => {
