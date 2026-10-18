@@ -5,6 +5,13 @@ for the approval summary and the GitHub release notes. Every section has a `Comp
 someone upgrading (CLI options, report or gate.json schema, config, gate behaviour), or "none". 0.x rule: any such
 change is a minor bump, never a patch. The plugin and skills have their own changelog in the repository root.
 
+## 0.1.0-rc.1
+
+The first release built, approved and published by the release workflow (trusted publishing, npm provenance, `cli-v`
+tag). Channel `next`. Same CLI as 0.1.0-rc.0; only the release process and its documentation changed.
+
+Compatibility: none.
+
 ## 0.1.0-rc.0
 
 The first package, published once by hand to set up npm trusted publishing (docs/RELEASING.md). Channel `next`.
