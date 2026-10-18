@@ -28,7 +28,9 @@ const partOf = (p) => {
 const textOf = (v) => {
   if (v == null) return '';
   if (typeof v === 'string' || typeof v === 'number') return String(v);
-  if (Array.isArray(v)) { const parts = v.map(partOf); return v.length && parts.every(x => x === null) ? null : parts.filter(Boolean).join('\n'); }
+  // One unreadable part makes the whole turn unreadable: dropping it would grade the chat on part of what was said
+  // (viaknox #42 review). Known tool/reasoning parts are '' (skipped on purpose), never null.
+  if (Array.isArray(v)) { const parts = v.map(partOf); return parts.some(x => x === null) ? null : parts.filter(Boolean).join('\n'); }
   return null;
 };
 const norm = (m) => {

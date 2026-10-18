@@ -622,6 +622,19 @@ test('PR #32 review: object-valued message content makes the chat unreadable; te
   assert.equal(cli(['check', f, '--gate', '--out', join(d, 'o')]).status, EXIT.UNDETERMINED, '[object Object] must never pass the gate');
 });
 
+test('viaknox #42 review: an unknown part next to readable text still makes the chat unreadable (never graded on part of a turn)', () => {
+  const q = { role: 'user', content: 'When do you open?' }, a = { role: 'assistant', content: 'We open at 9am.' };
+  const mixedUser = [{ role: 'user', content: [{ type: 'text', text: 'When do you open?' }, { type: 'some_new_part', data: 'x' }] }, a];
+  const mixedAgent = [q, { role: 'assistant', content: [{ type: 'text', text: 'We open at 9am.' }, { type: 'mystery' }] }];
+  const nullPart = [q, { role: 'assistant', content: ['We open at 9am.', null] }];
+  const fine = [q, { role: 'assistant', content: [{ type: 'text', text: 'Let me check.' }, { type: 'tool_use', name: 'hours' }, { type: 'image' }] }, a];
+  const c = parseTranscripts(JSON.stringify([mixedUser, mixedAgent, nullPart, fine]));
+  assert.deepEqual(c.rejected, [1, 2, 3], 'an unreadable part fails the whole chat closed, as an object or an all-unknown list already does');
+  assert.deepEqual(c.positions, [4], 'known skipped parts (tool calls) and media placeholders still read');
+  const d = tmp(), f = join(d, 'mixed.json'); writeFileSync(f, JSON.stringify(mixedUser));
+  assert.equal(cli(['check', f, '--gate', '--out', join(d, 'o')]).status, EXIT.UNDETERMINED, 'a chat with a dropped part must never pass the gate');
+});
+
 test('viaknox #41 review: tool-call, media and empty parts do not throw away a readable chat', () => {
   const q = { role: 'user', content: 'When do you open?' }, a = { role: 'assistant', content: 'We open at 9am.' };
   // Claude-style tool turns: the call sits in an assistant turn, the result in a user turn.
