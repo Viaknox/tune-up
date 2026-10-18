@@ -613,13 +613,31 @@ test('PR #32 review: a manual npm publish defaults to the next channel, never la
 
 test('PR #32 review: object-valued message content makes the chat unreadable; text parts of multimodal content are read', () => {
   const ok = { role: 'assistant', content: 'We open at 9am.' };
-  const c = parseTranscripts(JSON.stringify([[{ role: 'user', content: { a: 1 } }, ok], [{ role: 'user', content: [{ type: 'image_url', image_url: 'x' }] }, ok], [{ role: 'user', content: [{ type: 'text', text: 'When do you open?' }] }, ok]]));
-  assert.deepEqual(c.rejected, [1, 2]); assert.deepEqual(c.positions, [3]);
+  const c = parseTranscripts(JSON.stringify([[{ role: 'user', content: { a: 1 } }, ok], [{ role: 'user', content: [{ type: 'mystery', blob: 'x' }] }, ok], [{ role: 'user', content: [{ type: 'text', text: 'When do you open?' }] }, ok]]));
+  assert.deepEqual(c.rejected, [1, 2], 'an object, or a part of an unknown type, still makes the chat unreadable'); assert.deepEqual(c.positions, [3]);
   assert.equal(c[0][0].content, 'When do you open?');
   const tool = parseTranscripts(JSON.stringify([[{ role: 'user', content: 'When do you open?' }, { role: 'tool', content: { hours: '9-5' } }, { role: 'system', content: [{ type: 'x' }] }, ok]]));
   assert.equal(tool.length, 1, 'structured tool and system turns are dropped, not a reason to reject the chat');
   const d = tmp(), f = join(d, 'obj.json'); writeFileSync(f, JSON.stringify([{ role: 'user', content: { a: 1 } }, ok]));
   assert.equal(cli(['check', f, '--gate', '--out', join(d, 'o')]).status, EXIT.UNDETERMINED, '[object Object] must never pass the gate');
+});
+
+test('viaknox #41 review: tool-call, media and empty parts do not throw away a readable chat', () => {
+  const q = { role: 'user', content: 'When do you open?' }, a = { role: 'assistant', content: 'We open at 9am.' };
+  // Claude-style tool turns: the call sits in an assistant turn, the result in a user turn.
+  const claude = [q, { role: 'assistant', content: [{ type: 'text', text: 'Let me check.' }, { type: 'tool_use', id: 't1', name: 'hours', input: {} }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: '9-5' }] }] }, a];
+  const openai = [q, { role: 'assistant', content: [{ type: 'function_call', name: 'hours', arguments: '{}' }] }, a];
+  const media = [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', data: 'xx' } }] }, { role: 'user', content: [{ type: 'image_url', image_url: { url: 'x' } }] },
+    { role: 'user', content: [{ type: 'input_file', file_id: 'f' }] }, { role: 'user', content: [{ type: 'input_audio', input_audio: {} }] }, q, a];
+  const empty = [q, { role: 'assistant', content: [] }, a];
+  const c = parseTranscripts(JSON.stringify([claude, openai, media, empty]));
+  assert.deepEqual(c.rejected, []); assert.deepEqual(c.positions, [1, 2, 3, 4]);
+  assert.deepEqual(c[0].map(m => m.content), ['When do you open?', 'Let me check.', 'We open at 9am.'], 'the tool call and its result are dropped like tool turns; the user never typed the result');
+  assert.deepEqual(c[1].map(m => m.content), ['When do you open?', 'We open at 9am.']);
+  assert.deepEqual(c[2].map(m => m.content).slice(0, 4), ['[image]', '[image]', '[file]', '[audio]'], 'media becomes the placeholder the checks already treat as an action');
+  assert.deepEqual(checkConversation(c[2]).filter(f => f.code === 'repeated_ask'), [], 'two images in a row are not the user asking again');
+  assert.deepEqual(c[3].map(m => m.content), ['When do you open?', 'We open at 9am.']);
 });
 
 test('PR #32 review: every npx command in the README pins the exact package version', () => {
