@@ -237,8 +237,16 @@ if (cmd === 'run') {
   const files = readdirSync(out).map(f => f.match(/^attempt-(\d+)\.json$/)).filter(Boolean).sort((a, b) => a[1] - b[1]);
   // Only R2 attempts made against this exact suite and baseline, whose re-run passes the same report checks, count;
   // older ones are kept on disk but ignored.
-  const usable = (a) => { try { return a.schema === 'agenttuneup/attempt@0.2' && a.suite_id === suiteId && a.baseline_at === before.evaluated_at && !!checkReport(a.after, { suiteId, expected }); } catch (e) { if (e instanceof ReportError) return false; throw e; } };
-  const attempts = files.map(m => { try { return read(m[0]); } catch { return null; } }).filter(a => a && usable(a));
+  // An attempt file is never trusted beyond its re-run report: lift, regressions and evidence are recomputed from it, and
+  // a malformed or hand-edited file is ignored, never a crash (review: R2 finding 1).
+  const usable = (a) => { try {
+    if (!a || a.schema !== 'agenttuneup/attempt@0.2' || a.suite_id !== suiteId || a.baseline_at !== before.evaluated_at) return null;
+    if (!a.fix || typeof a.fix.revised_instructions !== 'string' || !Array.isArray(a.fix.changes)) return null;
+    checkReport(a.after, { suiteId, expected });
+    const c = compare(before, a.after);
+    return { attempt: a.attempt, fix: a.fix, after: a.after, cost: a.cost, lift: c.lift, gains: c.gains, losses: c.losses, evidence: c.evidence, regressions: regressions(before, a.after) };
+  } catch (e) { if (e instanceof ReportError || e instanceof TypeError) return null; throw e; } };
+  const attempts = files.map(m => { try { return usable({ ...read(m[0]), attempt: Number(m[1]) }); } catch { return null; } }).filter(Boolean);
   const n = files.length ? Number(files[files.length - 1][1]) + 1 : 1;
   console.error(`Tune-up attempt ${n}: drafting a fix with ${WRITER_MODEL}…`);
   const fix = await proposeFix(or, { instructions: suite.instructions, failures: before.failures, sacred: suite.sacred || [], cases: suite.cases,
@@ -275,6 +283,8 @@ if (cmd === 'run') {
   const exit = g ? g.exit : all.every(a => fullyEvaluated(a.after)) ? EXIT.FAIL : EXIT.UNDETERMINED;
   if (opt('json', false) === true) {
     if (g) save('gate.json', JSON.stringify(gateJson(g, { engineVersion: VERSION, gating, suiteId, judgeModel: JUDGE_MODEL }), null, 2) + '\n');
+    // No attempt was gated: an older gate.json (say a PASS from an earlier run) must not sit next to this tune.json.
+    else if (existsSync(join(out, 'gate.json'))) unlinkSync(join(out, 'gate.json'));
     const p = { ...DEFAULT_POLICY, ...policy };
     save('tune.json', JSON.stringify({ schema: 'agenttuneup/tune@0.1', engine_version: VERSION, gating, selected_attempt: best ? best.attempt : null, why,
       policy: { min: p.min, max_undetermined: p.maxUndetermined, allow_rules_fail: p.allowRulesFail }, allow_single_repeat: opts.allowSingleRepeat, exit: gating ? exit : EXIT.PASS,

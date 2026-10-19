@@ -10,7 +10,6 @@ export class ReportError extends Error {}
 
 const id = (r) => `${r.case}#${r.rep}`;
 const UNCLEAR = new Set(['undetermined', 'missing', 'errored']);
-const judgedOf = (rep) => !/^none/.test(String(rep.judge));
 
 /**
  * Refuses a report that cannot be compared: wrong schema, other suite, duplicate or missing case-runs, or stored states
@@ -19,6 +18,8 @@ const judgedOf = (rep) => !/^none/.test(String(rep.judge));
  */
 export function checkReport(rep, { suiteId, expected }) {
   if (!rep || typeof rep !== 'object') throw new ReportError('it is not a report');
+  // tune always compares judged runs; a rules-only report has no judge answers to compare (review: R2 finding 4).
+  if (/^none/.test(String(rep.judge))) throw new ReportError('it was made without the judge (rules only). Make a fresh `run` first');
   if (rep.suite_id !== suiteId) throw new ReportError('it was made from a different suite or settings. Run `run` again with this suite first');
   if (rep.schema !== REPORT_SCHEMA) {
     const older = !rep.schema || /^tune-up\/report@0\.[01]$/.test(rep.schema);
@@ -26,8 +27,9 @@ export function checkReport(rep, { suiteId, expected }) {
       : `it is a newer report (${rep.schema}) than this version understands. Update agenttuneup`);
   }
   if (!Array.isArray(rep.runs)) throw new ReportError('it has no runs');
-  const judged = judgedOf(rep), seen = new Map();
+  const judged = true, seen = new Map();   // rules-only reports were refused above
   for (const r of rep.runs) {
+    if (!r || typeof r !== 'object' || typeof r.case !== 'string' || !Number.isInteger(r.rep)) throw new ReportError('it has a run that is not a case-run');
     if (seen.has(id(r))) throw new ReportError(`it lists ${id(r)} twice`);
     if (!Array.isArray(r.findings) || !r.findings.length) throw new ReportError(`${id(r)} has no findings`);
     const s = stateOf(r, { judged });
@@ -40,6 +42,10 @@ export function checkReport(rep, { suiteId, expected }) {
   for (const r of rep.runs) counts[r.state]++;
   if (JSON.stringify(counts) !== JSON.stringify(rep.counts)) throw new ReportError('its counts do not match its runs');
   if (rep.pass_rate !== counts.ok / counts.expected) throw new ReportError('its pass_rate does not match its counts');
+  // The failures list feeds the fix writer and the new-rules-failure check, so it must be exactly what the findings say.
+  const want = rep.runs.flatMap(r => r.findings.filter(f => f && !f.ok && !f.unsure).map(f => JSON.stringify([r.case, r.rep, f.bucket, f.code, f.detail])));
+  const have = Array.isArray(rep.failures) ? rep.failures.map(f => JSON.stringify([f && f.case, f && f.rep, f && f.bucket, f && f.code, f && f.detail])) : null;
+  if (!have || JSON.stringify([...want].sort()) !== JSON.stringify([...have].sort())) throw new ReportError('its failures do not match its findings');
   return rep;
 }
 

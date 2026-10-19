@@ -58,7 +58,9 @@ export function buildReport({ suite, instructions, adapter, runs, judgeModel, ev
     // Strict: ok out of every expected case-run, as a raw fraction (rounded only for display).
     counts, pass_rate: counts.expected ? counts.ok / counts.expected : 0, inconsistent_cases: inconsistent, buckets,
     failures: all.filter(f => !f.ok && !f.unsure).map(f => ({ case: f.case, rep: f.rep, bucket: f.bucket, code: f.code, detail: f.detail, quote: f.quote })),
-    runs: stated.map(r => ({ case: r.case, rep: r.rep, state: r.state, findings: r.findings, turns: r.turns })),
+    // A passing check keeps only what the classifier needs: its detail can name a phrase the agent must never say, which
+    // report.json never wrote before R2 (review: R2 finding 3).
+    runs: stated.map(r => ({ case: r.case, rep: r.rep, state: r.state, findings: r.findings.map(f => (f && f.ok === true && !f.unsure ? { bucket: f.bucket, code: f.code, ok: true } : f)), turns: r.turns })),
     legacy: { pass_rate_lenient: runs.length ? runs.filter(r => lenientPassed(r.findings)).length / runs.length : 0,
       note: 'Deprecated: counted unsure answers as passes. Never used for any decision; removed in 0.3.' },
   };

@@ -265,13 +265,51 @@ test('R2 / checklist 6: a secret in a held chat never reaches report.json', () =
 });
 
 test('R2: checkReport and fullyEvaluated edge cases (mutation survivors in src/tune.js)', () => {
-  // A rules-only report (no judge) whose runs have no judge answer is complete, not missing.
+  // tune compares judged runs only: a rules-only report is refused (review: R2 finding 4)...
   const r = rep(['ok'], { judgeModel: 'none (rule checks only)' });
   r.runs[0].findings = [{ bucket: 'happy', code: 'no_friction', ok: true }]; r.runs[0].state = 'ok'; r.suite_id = 's';
-  assert.equal(checkReport(r, { suiteId: 's', expected: [{ case: 'c1', rep: 1 }] }), r);
-  // ...but the same runs in a judged report are missing their judge answer.
+  assert.throws(() => checkReport(r, { suiteId: 's', expected: [{ case: 'c1', rep: 1 }] }), /without the judge/);
+  // ...and the same runs in a judged report are missing their judge answer.
   const j = structuredClone(r); j.judge = 'typesafe/jev-1.13';
   assert.throws(() => checkReport(j, { suiteId: 's', expected: [{ case: 'c1', rep: 1 }] }), /says ok, but its findings say missing/);
   for (const bad of [null, 'report', 7]) assert.throws(() => checkReport(bad, { suiteId: 's', expected: [] }), (e) => e instanceof ReportError && /not a report/.test(e.message), String(bad));
   assert.equal(fullyEvaluated({ runs: [] }), false, 'nothing evaluated is never "fully checked"');
+});
+
+test('R2 review: malformed runs, edited failures and passing-check details never get through', () => {
+  const r = rep(['ok', 'failed']); r.suite_id = 's';
+  const ctx = { suiteId: 's', expected: [{ case: 'c1', rep: 1 }, { case: 'c2', rep: 1 }] };
+  for (const bad of [null, 'x', { case: 1, rep: 1 }, { case: 'c1', rep: '1' }]) {
+    const x = structuredClone(r); x.runs[0] = bad;
+    assert.throws(() => checkReport(x, ctx), (e) => e instanceof ReportError && /not a case-run/.test(e.message), JSON.stringify(bad));
+  }
+  const hidden = structuredClone(r); hidden.failures = [];
+  assert.throws(() => checkReport(hidden, ctx), /failures do not match its findings/);
+  const edited = structuredClone(r); edited.failures[0].detail = 'something else';
+  assert.throws(() => checkReport(edited, ctx), /failures do not match/);
+  const noList = structuredClone(r); delete noList.failures;
+  assert.throws(() => checkReport(noList, ctx), /failures do not match/);
+  // A forbidden phrase the agent did NOT say is not written to report.json (review: R2 finding 3).
+  const p = buildReport({ suite, instructions: 'x', adapter, judgeModel: 'typesafe/jev-1.13', evidenceLevel: 2,
+    runs: [{ case: 'c1', rep: 1, findings: [...OK, { bucket: 'rules', code: 'must_not_say', ok: true, detail: 'Did not reveal "ACME-DISCOUNT-7731"' }], turns: [], ms: 0, tokens: 0, toolCalls: 0 }] });
+  assert.doesNotMatch(JSON.stringify(p), /ACME-DISCOUNT-7731/);
+  assert.equal(p.runs[0].state, 'ok');
+});
+
+test('R2 review: a hand-edited or broken attempt file is recomputed or ignored, never trusted and never a crash', () => {
+  const p = project(); runBaseline(p, BAD);
+  assert.equal(tune(p, { answers: BAD }).status, 0);
+  const f = join(p.out, 'attempt-1.json'), a = JSON.parse(readFileSync(f, 'utf8'));
+  // Claims a big lift its own re-run does not support.
+  writeFileSync(f, JSON.stringify({ ...a, lift: 5, regressions: [], evidence: undefined }));
+  writeFileSync(join(p.out, 'attempt-2.json'), '{"schema":"agenttuneup/attempt@0.2"');   // cut off mid-write
+  writeFileSync(join(p.out, 'attempt-3.json'), JSON.stringify({ ...a, fix: null }));
+  writeFileSync(join(p.out, 'gate.json'), '{"verdict":"PASS (judged)","exit":0}');      // left by an earlier run
+  const t = tune(p, { answers: BAD }, ['--gate', '--json']);
+  assert.equal(t.status, EXIT.FAIL, t.stderr); assert.doesNotMatch(t.stderr, /crashed/);
+  const md = readFileSync(join(p.out, 'tune-up.md'), 'utf8');
+  assert.match(md, /\| 1 \| 0 \|/, 'attempt 1 shows its recomputed lift, not the edited +5');
+  assert.doesNotMatch(md, /\| 3 \|/, 'an attempt with no fix is ignored');
+  assert.equal(existsSync(join(p.out, 'gate.json')), false, 'no stale gate.json next to a tune.json that gated nothing');
+  assert.equal(JSON.parse(readFileSync(join(p.out, 'tune.json'), 'utf8')).selected_attempt, null);
 });
