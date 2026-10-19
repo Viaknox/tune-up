@@ -54,10 +54,12 @@ export const fullyEvaluated = (rep) => rep.runs.length > 0 && rep.runs.every(r =
 
 /** Matched case-run comparison of two checked reports of the same suite. */
 export function compare(before, after) {
-  const was = new Map(before.runs.map(r => [id(r), r.state]));
+  // Walk the baseline, not the re-run: a case-run absent from the re-run is "missing", never silently skipped
+  // (viaknox #44 review).
+  const now = new Map(after.runs.map(r => [id(r), r.state]));
   const gains = [], losses = [], evidence = { to_ok: [], from_ok: [], to_unclear: [] };
-  for (const r of after.runs) {
-    const b = was.get(id(r)), a = r.state;
+  for (const r of before.runs) {
+    const b = r.state, a = now.get(id(r)) ?? 'missing';
     if (b === 'failed' && a === 'ok') gains.push(id(r));
     if (b === 'ok' && a !== 'ok') losses.push(id(r));
     if (UNCLEAR.has(b) && a === 'ok') evidence.to_ok.push(id(r));

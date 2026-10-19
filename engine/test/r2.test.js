@@ -313,3 +313,15 @@ test('R2 review: a hand-edited or broken attempt file is recomputed or ignored, 
   assert.equal(existsSync(join(p.out, 'gate.json')), false, 'no stale gate.json next to a tune.json that gated nothing');
   assert.equal(JSON.parse(readFileSync(join(p.out, 'tune.json'), 'utf8')).selected_attempt, null);
 });
+
+test('viaknox #44 review: a run that passed before and is absent from the re-run is a loss and a regression', () => {
+  const before = rep(['ok', 'failed', 'ok'], { reps: 1 });
+  const after = rep(['ok', 'ok', 'ok'], { reps: 1 }); after.runs = after.runs.filter(r => r.case !== 'c3');
+  const c = compare(before, after);
+  assert.deepEqual([c.lift, c.gains, c.losses], [0, ['c2#1'], ['c3#1']]);
+  assert.deepEqual(c.evidence.from_ok, ['c3#1']);
+  assert.deepEqual(regressions(before, after), ['c3#1']);
+  // A failed run absent after is "couldn't tell" evidence, not a gain.
+  const b2 = rep(['failed'], { reps: 1 }), a2 = rep(['ok'], { reps: 1 }); a2.runs = [];
+  assert.deepEqual(compare(b2, a2), { lift: 0, gains: [], losses: [], evidence: { to_ok: [], from_ok: [], to_unclear: ['c1#1'] } });
+});
