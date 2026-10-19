@@ -71,8 +71,9 @@ export function buildReport({ suite, instructions, adapter, runs, judgeModel, ev
 /** @param {any} before @param {any} after */
 export function regressions(before, after) {
   const id = (r) => `${r.case}#${r.rep}`;
-  const okBefore = new Set(before.runs.filter(r => r.state === 'ok').map(id));
-  const broke = after.runs.filter(r => okBefore.has(id(r)) && r.state !== 'ok').map(id);
+  // Every run that was ok before and is not ok now, including one absent from the re-run (viaknox #44 review).
+  const okAfter = new Set(after.runs.filter(r => r.state === 'ok').map(id));
+  const broke = before.runs.filter(r => r.state === 'ok' && !okAfter.has(id(r))).map(id);
   // Rules failures are compared one by one (case, rule and what was violated, counted), so a second leak in a case
   // that already leaked something else still counts as new.
   // Judge details carry a vote percentage that changes run to run; compare without it.
