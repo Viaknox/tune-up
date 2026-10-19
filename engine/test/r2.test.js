@@ -225,7 +225,9 @@ test('R2 / checklist 7: with one run per test, tune proposes nothing unless --al
   assert.doesNotMatch(readFileSync(join(p.out, 'tune-up.md'), 'utf8'), /Best proposed tune-up/);
   assert.match(readFileSync(join(p.out, 'tune-up.md'), 'utf8'), /--allow-single-repeat/);
   const q = project({ repeats: 1 }); runBaseline(q, BAD);
-  assert.equal(tune(q, { answers: GOOD }, ['--allow-single-repeat']).status, 0);
+  const t2 = tune(q, { answers: GOOD }, ['--allow-single-repeat', '--gate']);
+  assert.equal(t2.status, EXIT.PASS, t2.stderr);
+  assert.match(t2.stderr, /agenttuneup: PASS \(judged\) \[loosened: --allow-single-repeat\]/, 'the override is printed like any loosening');
   assert.match(readFileSync(join(q.out, 'tune-up.md'), 'utf8'), /Best proposed tune-up: attempt 1/);
   // The override is a tune option only.
   assert.equal(cli(['run', q.s, '--consent', '--allow-single-repeat', '--out', q.out], { answers: GOOD }).status, EXIT.USAGE);
@@ -241,8 +243,8 @@ test('R2 / checklist 3: tune --gate needs a fully checked baseline that meets --
 });
 
 test('R2 / checklist 9: gate.json and report.json agree on the counts for the same run', () => {
-  const p = project(); const r = runBaseline(p, VAGUE, ['--gate', '--json']);
-  assert.equal(r.status, 0);
+  const p = project(); const r = cli(['run', p.s, '--consent', '--gate', '--json', '--out', p.out], { answers: VAGUE });
+  assert.equal(r.status, EXIT.FAIL, r.stderr);
   const rep1 = JSON.parse(readFileSync(join(p.out, 'report.json'), 'utf8')), g = JSON.parse(readFileSync(join(p.out, 'gate.json'), 'utf8'));
   assert.deepEqual(rep1.counts, g.counts);
   const d = tmp(), chat = join(d, 'c.txt'); writeFileSync(chat, 'User: hi\nBot: We open at 9am.\n---\nUser: hi again\nBot: We open at 9am.\n---\njunk\n');
@@ -260,4 +262,16 @@ test('R2 / checklist 6: a secret in a held chat never reaches report.json', () =
   const raw = readFileSync(join(d, 'o', 'report.json'), 'utf8');
   assert.doesNotMatch(raw, /zanzibarco/i);
   assert.equal(JSON.parse(raw).schema, REPORT_SCHEMA);
+});
+
+test('R2: checkReport and fullyEvaluated edge cases (mutation survivors in src/tune.js)', () => {
+  // A rules-only report (no judge) whose runs have no judge answer is complete, not missing.
+  const r = rep(['ok'], { judgeModel: 'none (rule checks only)' });
+  r.runs[0].findings = [{ bucket: 'happy', code: 'no_friction', ok: true }]; r.runs[0].state = 'ok'; r.suite_id = 's';
+  assert.equal(checkReport(r, { suiteId: 's', expected: [{ case: 'c1', rep: 1 }] }), r);
+  // ...but the same runs in a judged report are missing their judge answer.
+  const j = structuredClone(r); j.judge = 'typesafe/jev-1.13';
+  assert.throws(() => checkReport(j, { suiteId: 's', expected: [{ case: 'c1', rep: 1 }] }), /says ok, but its findings say missing/);
+  for (const bad of [null, 'report', 7]) assert.throws(() => checkReport(bad, { suiteId: 's', expected: [] }), (e) => e instanceof ReportError && /not a report/.test(e.message), String(bad));
+  assert.equal(fullyEvaluated({ runs: [] }), false, 'nothing evaluated is never "fully checked"');
 });

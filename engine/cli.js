@@ -5,12 +5,15 @@
 //   agenttuneup check <chats.txt|chats.json> [--instructions file] [--agent name] [--private words.txt] [--consent] [--keyfile path] [--out dir] [gate options]
 //       Report card from real chats you paste or export (Level 1). Personal data is scrubbed locally first.
 //       Without --consent only the local rule checks run and nothing leaves this machine.
-//   agenttuneup tune <suite.json> --consent [--keyfile path] [--out dir] [--repeats N]
-//       One verified tune-up attempt: draft the smallest fix for the failures in <out>/report.json,
-//       re-run the same tests on it, save <out>/attempt-N.json, and rewrite tune-up.md with the best attempt.
-//       Run it again to try once more; earlier attempts that did not help are fed back to the writer.
+//   agenttuneup tune <suite.json> --consent [--keyfile path] [--out dir] [--repeats N] [--allow-single-repeat] [gate options]
+//       One tune-up attempt: draft the smallest fix for the failures in <out>/report.json, re-run the same tests on it,
+//       save <out>/attempt-N.json, and rewrite tune-up.md with the best attempt. Lift counts only runs that went from
+//       failed to passed (src/tune.js); a run that became "couldn't tell" is never an improvement. With --gate the exit
+//       code is the gate on the best eligible attempt's re-run (exit 1 if every attempt was checked and none helped,
+//       3 if an attempt could not be fully checked). Run it again to try once more; earlier attempts that did not help
+//       are fed back to the writer.
 // A fix is a proposal. This tool never applies it to a real agent.
-// Gate options (check and run; docs/CLI-PLAN.md §4): --gate turns the CI gate on (without it the exit code is 0 whatever
+// Gate options (check, run and tune; docs/CLI-PLAN.md §4): --gate turns the CI gate on (without it the exit code is 0 whatever
 // the result); --min, --max-undetermined and --allow-rules-fail loosen it and are printed in the verdict; --json writes
 // <out>/gate.json.
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, unlinkSync } from 'node:fs';
@@ -21,11 +24,12 @@ import { httpAdapter, modelAdapter, headerVars } from './src/adapters.js';
 import { evaluate, pool, CONCURRENCY } from './src/evaluate.js';
 import { validateSuite } from './src/rules.js';
 import { proposeFix, WRITER_MODEL } from './src/writer.js';
-import { toMarkdown, buildReport, runPassed, regressions } from './src/report.js';
+import { toMarkdown, buildReport, regressions, REPORT_SCHEMA } from './src/report.js';
+import { checkReport, compare, eligibility, fullyEvaluated, pickBest, ReportError } from './src/tune.js';
 import { scrubber, ScrubError } from './src/redact.js';
 import { parseTranscripts, checkConversation } from './src/transcripts.js';
 import { judgeConversation, judgeHeld, chatState, JUDGE_MODEL } from './src/judge.js';
-import { EXIT, gate, line, gateJson } from './src/gate.js';
+import { EXIT, DEFAULT_POLICY, gate, line, gateJson } from './src/gate.js';
 
 // Exit codes (src/gate.js), with --gate: 0 pass, 1 fail, 3 undetermined, 2 usage or config error. A crash is never 0.
 // A crash prints only the error's type and where it happened, never its message: messages from fetch, Headers or JSON
@@ -34,7 +38,7 @@ const crashed = (e) => { const where = (String(e && e.stack || '').split('\n').f
   console.error(`agenttuneup: crashed (${(e && e.name) || 'Error'}${where ? ', ' + where.replace(/\(?file:\/\/[^)]*?([\w.-]+\.js:\d+):\d+\)?/, '$1') : ''}). Please report this.`); process.exit(EXIT.FAIL); };
 process.on('uncaughtException', crashed);
 process.on('unhandledRejection', crashed);
-const USAGE = 'usage: agenttuneup check <chats.txt|chats.json> [--instructions file] [--agent name] [--private words.txt] [--consent] [--keyfile path] [--out dir] [gate options]\n       agenttuneup run <suite.json> --consent [--keyfile path] [--out dir] [--repeats N] [--private words.txt] [gate options]\n       agenttuneup tune <suite.json> --consent [--keyfile path] [--out dir] [--repeats N] [--private words.txt]\n       agenttuneup --version | --help\nGate options: --gate (CI gate on; without it the exit code is always 0)  --json (write gate.json)\n  Loosen the strict defaults (printed in the verdict and gate.json): --min <0-100> (default 100)  --max-undetermined <0-100> (default 0)  --allow-rules-fail\nExit codes with --gate: 0 PASS (judged) or PASS: local rules only, 1 FAIL, 3 UNDETERMINED (fails CI too), 2 usage or config error.';
+const USAGE = 'usage: agenttuneup check <chats.txt|chats.json> [--instructions file] [--agent name] [--private words.txt] [--consent] [--keyfile path] [--out dir] [gate options]\n       agenttuneup run <suite.json> --consent [--keyfile path] [--out dir] [--repeats N] [--private words.txt] [gate options]\n       agenttuneup tune <suite.json> --consent [--keyfile path] [--out dir] [--repeats N] [--private words.txt] [--allow-single-repeat] [gate options]\n       agenttuneup --version | --help\nGate options: --gate (CI gate on; without it the exit code is always 0)  --json (write gate.json)\n  Loosen the strict defaults (printed in the verdict and gate.json): --min <0-100> (default 100)  --max-undetermined <0-100> (default 0)  --allow-rules-fail\nExit codes with --gate: 0 PASS (judged) or PASS: local rules only, 1 FAIL, 3 UNDETERMINED (fails CI too), 2 usage or config error.';
 const usage = (msg) => { console.error((msg ? msg + '\n' : '') + USAGE); process.exit(EXIT.USAGE); };
 const argv = process.argv.slice(2);
 if (argv.length === 1 && (argv[0] === '--version' || argv[0] === '-v')) { console.log(JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version); process.exit(0); }
@@ -42,11 +46,9 @@ if (argv.length === 1 && (argv[0] === '--help' || argv[0] === '-h')) { console.l
 // Strict flags: an unknown, repeated or empty flag is an error, never ignored. No flag or setting skips a check; the only
 // ways to loosen the gate are the three documented options, and each one is printed (docs/CLI-PLAN.md §4, G11b).
 const GATE = { gate: 0, json: 0, min: 1, 'max-undetermined': 1, 'allow-rules-fail': 0 };
-const FLAGS = { check: { instructions: 1, agent: 1, private: 1, keyfile: 1, out: 1, consent: 0, ...GATE }, run: { keyfile: 1, out: 1, repeats: 1, private: 1, consent: 0, ...GATE }, tune: { keyfile: 1, out: 1, repeats: 1, private: 1, consent: 0 } };
+const FLAGS = { check: { instructions: 1, agent: 1, private: 1, keyfile: 1, out: 1, consent: 0, ...GATE }, run: { keyfile: 1, out: 1, repeats: 1, private: 1, consent: 0, ...GATE }, tune: { keyfile: 1, out: 1, repeats: 1, private: 1, consent: 0, 'allow-single-repeat': 0, ...GATE } };
 const [cmd, file, ...rest] = argv;
 if (!Object.hasOwn(FLAGS, cmd) || !file || file.startsWith('-')) usage();
-// Gating a tune-up is defined only in R2 (the best eligible attempt), so it is refused rather than guessed (G11c).
-if (cmd === 'tune' && rest.some(a => Object.hasOwn(GATE, a.replace(/^--/, '')) && a.startsWith('--'))) usage('tune does not take gate options yet: gate the `run` before and after instead.');
 const flags = {};
 for (let i = 0; i < rest.length; i++) {
   const m = /^--([a-z]+(?:-[a-z]+)*)$/.exec(rest[i]);
@@ -124,20 +126,22 @@ if (cmd === 'check') {
     // (PR #16 review).
     // The report goes through the same fail-closed check as the judge: residual-only secrets are held, not written out (PR #16 review).
     const shown = (t) => { try { const z = scrub.sanitize(t); return z.held ? '[held back: secret-like content]' : z.text; } catch (e) { if (e instanceof ScrubError) return '[held back: too large to scrub safely]'; throw e; } };
-    return { case: `chat-${convos.positions[i]}`, rep: 1, passed: runPassed(findings), findings: findings.map(f => ({ ...f, quote: f.quote && shown(f.quote) })),
+    return { case: `chat-${convos.positions[i]}`, rep: 1, findings: findings.map(f => ({ ...f, quote: f.quote && shown(f.quote) })),
       turns: msgs.map(m => ({ role: m.role, reply: shown(m.content) })), ms: 0, tokens: 0, toolCalls: 0 };
   });
   // With no chat to check there are no scores to show (a report card over nothing would print NaN): the report says so
   // and lists what could not be read (PR #32 review).
-  const rep = runs.length ? buildReport({ suite: { agent: opt('agent', 'Your agent'), repeats: 1 }, instructions, adapter: { name: 'paste', observesTools: false }, runs, judgeModel: or ? JUDGE_MODEL : 'none (rule checks only)', evidenceLevel: 1 })
-    : { schema: 'tune-up/report@0.1', agent: opt('agent', 'Your agent'), evaluated_at: new Date().toISOString(), evidence_level: 1, adapter: 'paste', cases: 0, pass_rate: null, runs: [] };
+  const expected = convos.positions.map(p => ({ case: `chat-${p}`, rep: 1 }));
+  const rep = runs.length ? buildReport({ suite: { agent: opt('agent', 'Your agent'), repeats: 1 }, instructions, adapter: { name: 'paste', observesTools: false }, runs, judgeModel: or ? JUDGE_MODEL : 'none (rule checks only)', evidenceLevel: 1, expected, unreadable: rejected })
+    : { schema: REPORT_SCHEMA, agent: opt('agent', 'Your agent'), evaluated_at: new Date().toISOString(), evidence_level: 1, adapter: 'paste', cases: 0,
+      counts: { expected: rejected.length, ok: 0, failed: 0, undetermined: 0, missing: rejected.length, errored: 0 }, pass_rate: 0, runs: [] };
   rep.scrubbed = scrub.counts();
   if (rejected.length) rep.unreadable_entries = rejected;
   save('report.json', JSON.stringify(rep, null, 2));
   const md = (runs.length ? toMarkdown(rep, { title: 'Report card' }) : `# Report card: ${rep.agent}\n\nNo chat in the file could be read, so nothing was checked and there is no score.\n`) + (rejected.length ? `\nNot checked: entr${rejected.length === 1 ? 'y' : 'ies'} ${rejected.join(', ')} of the file could not be read as a chat, so this report card is incomplete.\n` : '') + `\nScrubbed before checking: ${Object.entries(rep.scrubbed).map(([k, v]) => `${v} ${k.toLowerCase()}`).join(', ') || 'nothing found'}.` + (or ? ` Model cost: $${or.spent().toFixed(5)}` : '') + '\n';
   save('report.md', md); console.log(md);
   // The exit code comes from the findings in memory, never from report.json (T5).
-  finish(runs, { expected: convos.positions.map(p => ({ case: `chat-${p}`, rep: 1 })), judged: !!or, unreadable: rejected });
+  finish(runs, { expected, judged: !!or, unreadable: rejected });
 } else {
 if (!consent) { console.error(NOTICE + '\nAdd --consent to run with remote models.'); process.exit(2); }
 
@@ -196,10 +200,11 @@ if (cmd === 'tune' && adapter.acceptsInstructions === false) {
   console.error('This http agent has no way to receive new instructions, so a tune-up cannot be verified by re-running it. Add "{{instructions}}" to agent_config.body, or use the model adapter.'); process.exit(2);
 }
 const log = (s) => console.error('  ' + s);
-// Lift in percentage points from raw pass counts (reports round pass rates for display only).
-const rate = (rep) => 100 * rep.runs.filter(r => r.passed).length / rep.runs.length;
-const liftOf = (before, after) => rate(after) - rate(before);
 const read = (f) => JSON.parse(readFileSync(join(out, f), 'utf8'));
+// Table cells: a | or a line break inside a reason would split the row.
+const cell = (t) => String(t).replace(/\|/g, '/').replace(/\r?\n/g, ' ');
+// Every case-run this suite should produce: the identities reports and attempts are matched on.
+const expected = suite.cases.flatMap(c => Array.from({ length: repeats }, (_, k) => ({ case: c.id, rep: k + 1 })));
 
 if (cmd === 'run') {
   console.error(`Evaluating ${suite.agent}: ${suite.cases.length} cases × ${suite.repeats} runs`);
@@ -208,38 +213,78 @@ if (cmd === 'run') {
   save('report.json', JSON.stringify(rep, null, 2));
   const md = toMarkdown(rep, { title: 'Report card' }) + `\nModel cost for this run: $${or.spent().toFixed(5)}\n`;
   save('report.md', md); console.log(md);
-  finish(rep.gateRuns, { expected: suite.cases.flatMap(c => Array.from({ length: repeats }, (_, k) => ({ case: c.id, rep: k + 1 }))), judged: true, suiteId });
+  finish(rep.gateRuns, { expected, judged: true, suiteId });
 } else {
   if (!existsSync(join(out, 'report.json'))) { console.error(`No report in ${out}. Run \`run\` with the same suite and --out first.`); process.exit(2); }
-  const before = read('report.json');
-  if (before.suite_id !== suiteId) { console.error(`${out}/report.json was made from a different suite or settings. Run \`run\` again with this suite first.`); process.exit(2); }
-  if (!before.failures.length) { const u = before.buckets.filter(b => b.status === 'warn').map(b => b.name); console.log(u.length ? `No confident failures to tune, but these were unsure: ${u.join(', ')}. Review them in report.md, or run again with more --repeats.` : 'No failures to tune.'); process.exit(0); }
+  // The baseline must be a report this version can trust: same suite, report@0.2, every case-run present once, and states
+  // and counts its own findings support (src/tune.js checkReport). Anything else is refused before anything is sent.
+  let before;
+  try { before = checkReport(read('report.json'), { suiteId, expected }); }
+  catch (e) { if (!(e instanceof ReportError) && !(e instanceof SyntaxError)) throw e; console.error(`${out}/report.json cannot be used as the baseline: ${e instanceof SyntaxError ? 'it is not valid JSON' : e.message}.`); process.exit(2); }
+  // With --gate the baseline itself must be decisive: nothing missing or errored, and no more "couldn't tell" than
+  // --max-undetermined allows. Otherwise a fix could only be compared against guesses (checklist 3).
+  if (gating) {
+    const c = before.counts, maxU = policy.maxUndetermined ?? 0;
+    if (c.missing || c.errored) { console.error(`The baseline in ${out}/report.json has ${c.missing + c.errored} run(s) that were not checked (missing or errored). Run \`run\` again before tune --gate.`); process.exit(2); }
+    if (c.undetermined * 100 > maxU * c.expected) { console.error(`The baseline in ${out}/report.json has ${c.undetermined} run(s) the judge couldn't tell, above --max-undetermined ${maxU}. Run \`run\` again (more --repeats can help) before tune --gate.`); process.exit(2); }
+  }
+  if (!before.counts.failed) {
+    console.log(before.counts.undetermined ? `No failed runs to tune, but the judge couldn't tell on ${before.counts.undetermined}. Review them in report.md, or run again with more --repeats.` : 'No failures to tune.');
+    // Nothing to improve: with --gate, the baseline is the result.
+    if (gating) finish(before.runs, { expected, judged: true, suiteId }); else process.exit(0);
+  } else {
+  const opts = { repeats, allowSingleRepeat: opt('allow-single-repeat', false) === true };
   const files = readdirSync(out).map(f => f.match(/^attempt-(\d+)\.json$/)).filter(Boolean).sort((a, b) => a[1] - b[1]);
-  // Only attempts made against this exact suite and baseline count; older ones are kept on disk but ignored.
-  const attempts = files.map(m => read(m[0])).filter(a => a.suite_id === suiteId && a.baseline_at === before.evaluated_at);
+  // Only R2 attempts made against this exact suite and baseline, whose re-run passes the same report checks, count;
+  // older ones are kept on disk but ignored.
+  const usable = (a) => { try { return a.schema === 'agenttuneup/attempt@0.2' && a.suite_id === suiteId && a.baseline_at === before.evaluated_at && !!checkReport(a.after, { suiteId, expected }); } catch (e) { if (e instanceof ReportError) return false; throw e; } };
+  const attempts = files.map(m => { try { return read(m[0]); } catch { return null; } }).filter(a => a && usable(a));
   const n = files.length ? Number(files[files.length - 1][1]) + 1 : 1;
   console.error(`Tune-up attempt ${n}: drafting a fix with ${WRITER_MODEL}…`);
   const fix = await proposeFix(or, { instructions: suite.instructions, failures: before.failures, sacred: suite.sacred || [], cases: suite.cases,
-    // Every attempt that was not proposed goes back to the writer, including positive-lift ones that broke something.
-    tried: attempts.filter(a => a.lift <= 0 || a.verified !== true || regressions(before, a.after).length).map(a => ({ lift: a.lift, revised_instructions: a.fix.revised_instructions })), scrub });
+    // Every attempt that could not be proposed goes back to the writer, including positive-lift ones that broke something.
+    tried: attempts.filter(a => !eligibility(a, opts).eligible).map(a => ({ lift: a.lift, revised_instructions: a.fix.revised_instructions })), scrub });
   console.error('Re-running the same tests on the fixed instructions…');
   const after = await evaluate({ suite, instructions: fix.revised_instructions, adapter, or, log, scrub });
-  // A re-run where the judge or the agent failed, or the text was held back, was never fully checked, so it can never be
-  // proposed as verified, whatever its lift (PR #32 review). Saved with the attempt; older files without it never qualify.
-  const unverified = after.gateRuns.some(r => (r.findings || []).some(f => ['judge:error', 'agent_error', 'judge:held'].includes(f.code)));
-  const attempt = { attempt: n, suite_id: suiteId, baseline_at: before.evaluated_at, fix, lift: liftOf(before, after), after, cost: or.spent(), verified: !unverified };
+  after.suite_id = suiteId;
+  const c = compare(before, after);
+  const attempt = { schema: 'agenttuneup/attempt@0.2', attempt: n, suite_id: suiteId, baseline_at: before.evaluated_at, fix, lift: c.lift, gains: c.gains, losses: c.losses,
+    evidence: c.evidence, regressions: regressions(before, after), after, cost: or.spent() };
+  Object.assign(attempt, (({ verified, eligible, reasons }) => ({ verified, eligible, reasons }))(eligibility(attempt, opts)));
   save(`attempt-${n}.json`, JSON.stringify(attempt, null, 2));
-  const all = [...attempts, attempt].map(a => ({ ...a, regressions: regressions(before, a.after) }));
-  // A tune-up that breaks something that worked, or adds any rules failure, is never proposed, whatever its lift.
-  const eligible = all.filter(a => a.verified === true && a.lift > 0 && !a.regressions.length);
-  const best = eligible.length ? eligible.reduce((a, b) => (b.lift > a.lift ? b : a)) : null;
+  // Eligibility is recomputed for every attempt with today's options, so --allow-single-repeat applies to all of them.
+  const all = [...attempts, attempt].map(a => ({ ...a, ...eligibility(a, opts) }));
+  const best = pickBest(all.filter(a => a.eligible));
+  const signed = (k) => `${k > 0 ? '+' : ''}${k}`;
+  const moved = (a) => [a.evidence.to_unclear.length && `${a.evidence.to_unclear.length} run(s) went from failed to couldn't tell`,
+    a.evidence.to_ok.length && `${a.evidence.to_ok.length} run(s) went from couldn't tell to passed (better evidence, not counted as lift)`,
+    a.evidence.from_ok.length && `${a.evidence.from_ok.length} run(s) went from passed to couldn't tell`].filter(Boolean);
   let md = toMarkdown(before, { title: 'Report card (before)' });
-  md += `\n## Tune-up attempts\n\n| Attempt | Fix lift | Pass rate after | New failures |\n| --- | --- | --- | --- |\n${all.map(a => `| ${a.attempt} | ${a.lift > 0 ? '+' : ''}${Math.round(a.lift * 10) / 10} | ${a.after.pass_rate}% | ${a.regressions.join(', ') || 'none'}${a.verified === true ? '' : ' (not fully checked: a judge or agent call failed or was held back)'} |`).join('\n')}\n`;
+  md += `\n## Tune-up attempts\n\nLift counts runs that went from failed to passed, minus runs that stopped passing. A run the judge couldn't tell on is never counted as better.\n\n| Attempt | Fix lift | After | Notes |\n| --- | --- | --- | --- |\n`;
+  md += all.map(a => `| ${a.attempt} | ${signed(a.lift)} | ${a.after.counts.ok} passed, ${a.after.counts.undetermined} couldn't tell, ${a.after.counts.failed} failed | ${[...a.reasons, ...moved(a)].map(cell).join('; ') || 'proposable'} |`).join('\n') + '\n';
   if (best) {
-    md += `\n## Best proposed tune-up: attempt ${best.attempt} (not applied)\n\n${best.fix.changes.map(c => '- ' + c).join('\n')}\n\n**Revised instructions:**\n\n> ${best.fix.revised_instructions.replace(/\n/g, '\n> ')}\n\n`;
+    md += `\n## Best proposed tune-up: attempt ${best.attempt} (not applied)\n\n${best.fix.changes.map(x => '- ' + x).join('\n')}\n\n**Revised instructions:**\n\n> ${best.fix.revised_instructions.replace(/\n/g, '\n> ')}\n\n`;
     md += toMarkdown(best.after, { title: 'After the best tune-up', lift: best.lift }).replace(/^# /, '## ');
-  } else md += `\nNo fully checked attempt improved the agent without breaking something else${all.some(a => a.lift > 0) ? ' (attempts with new failures, or not fully checked, are never proposed)' : ''}, so there is nothing to propose. Run \`tune\` again, or review the failures by hand.\n`;
+  } else md += `\nNo attempt improved the agent without breaking something else, with every run fully checked, so there is nothing to propose. Run \`tune\` again, or review the failures by hand.\n`;
   md += `\nModel cost for this attempt: $${attempt.cost.toFixed(5)}\n`;
   save('tune-up.md', md); console.log(md);
+  // The gate for a tune-up (X4): the selected attempt's re-run, with the same policy as `run`. With no eligible attempt:
+  // 1 when every attempt was fully checked and none helped, 3 when any could not be fully checked.
+  const why = best ? `attempt ${best.attempt}: lift ${signed(best.lift)} (${best.gains.length} run(s) failed -> passed, ${best.losses.length} lost), ${best.after.counts.failed} failed after; chosen by highest lift, then fewest failures after, then earliest attempt` : null;
+  const g = best ? gate(best.after.runs, { expected, judged: true, policy }) : null;
+  const exit = g ? g.exit : all.every(a => fullyEvaluated(a.after)) ? EXIT.FAIL : EXIT.UNDETERMINED;
+  if (opt('json', false) === true) {
+    if (g) save('gate.json', JSON.stringify(gateJson(g, { engineVersion: VERSION, gating, suiteId, judgeModel: JUDGE_MODEL }), null, 2) + '\n');
+    const p = { ...DEFAULT_POLICY, ...policy };
+    save('tune.json', JSON.stringify({ schema: 'agenttuneup/tune@0.1', engine_version: VERSION, gating, selected_attempt: best ? best.attempt : null, why,
+      policy: { min: p.min, max_undetermined: p.maxUndetermined, allow_rules_fail: p.allowRulesFail }, allow_single_repeat: opts.allowSingleRepeat, exit: gating ? exit : EXIT.PASS,
+      attempts: all.map(a => ({ attempt: a.attempt, lift: a.lift, eligible: a.eligible, verified: a.verified, reasons: a.reasons })) }, null, 2) + '\n');
+  }
+  // --allow-single-repeat loosens what "verified" means, so like the gate options it is printed in the verdict.
+  const single = opts.allowSingleRepeat ? ' [loosened: --allow-single-repeat]' : '';
+  const verdict = g ? `${line(g)}${single} [tune-up: ${why}]` : exit === EXIT.FAIL ? `agenttuneup: FAIL${single} - no attempt improved the agent without breaking something else` : `agenttuneup: UNDETERMINED${single} - no attempt was eligible and not every attempt could be fully checked (a judge or agent call failed, or the judge couldn't tell)`;
+  console.error(gating ? `${verdict} (exit ${exit})` : `${verdict} (gate off: exit 0; add --gate to fail CI on this)`);
+  process.exitCode = gating ? exit : EXIT.PASS;
+  }
 }
 }

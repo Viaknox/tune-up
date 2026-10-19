@@ -1,4 +1,9 @@
-// Turns per-case findings into the six-part report card (schema "tune-up/report@0.1").
+// Turns per-case findings into the six-part report card (schema "tune-up/report@0.2"). Each case-run's state comes from
+// the CI gate's classifier (src/gate.js stateOf), so the report, the gate, `tune` and the hosted card can never disagree
+// about what passed (docs/CLI-PLAN.md S9, PG8). Only "ok" is a pass; "couldn't tell" never is.
+import { gate, stateOf } from './gate.js';
+
+export const REPORT_SCHEMA = 'tune-up/report@0.2';
 export const BUCKETS = [
   ['done', 'Gets it done'],
   ['tools', 'Uses tools and skills right'],
@@ -8,10 +13,21 @@ export const BUCKETS = [
   ['happy', 'Keeps you happy'],
 ];
 
-// A case-run passes when no rule check failed and no confident judge answer failed.
-export const runPassed = (findings) => findings.every(f => f.ok || f.unsure);
+// The R1 rule, kept only for the deprecated legacy number (PG15, one release): a run with no confident failure counted as
+// passed even when the judge could not tell. Never used for any decision.
+const lenientPassed = (findings) => findings.every(f => f.ok || f.unsure);
 
-export function buildReport({ suite, instructions, adapter, runs, judgeModel, evidenceLevel }) {
+/**
+ * @param {{ suite: any, instructions: string, adapter: any, runs: any[], judgeModel: string, evidenceLevel: number,
+ *   expected?: { case: string, rep: number }[], unreadable?: number[] }} args
+ *   `expected`: the case-runs that should exist (default: the ones given); `unreadable`: input entries that could not be
+ *   read as a chat, each a missing case-run (as in the gate).
+ */
+export function buildReport({ suite, instructions, adapter, runs, judgeModel, evidenceLevel, expected, unreadable = [] }) {
+  const judged = !/^none/.test(String(judgeModel));
+  const exp = expected || runs.map(r => ({ case: r.case, rep: r.rep }));
+  const counts = gate(runs, { expected: exp, judged, unreadable }).counts;
+  const stated = runs.map(r => ({ ...r, state: stateOf(r, { judged }) }));
   const all = runs.flatMap(r => r.findings.map(f => ({ ...f, case: r.case, rep: r.rep })));
   const buckets = BUCKETS.map(([id, name]) => {
     const fs = all.filter(f => f.bucket === id);
@@ -33,25 +49,28 @@ export function buildReport({ suite, instructions, adapter, runs, judgeModel, ev
   const known = (k) => runs.every(r => r[k] !== null && r[k] !== undefined);
   wb.usage = { avg_seconds: +(waste.ms / runs.length / 1000).toFixed(1), avg_tokens: known('tokens') ? Math.round(waste.tokens / runs.length) : null, avg_tool_calls: known('toolCalls') ? +(waste.toolCalls / runs.length).toFixed(1) : null };
   const byCase = Object.create(null);   // case ids are user text: "__proto__" or "constructor" must be plain keys (PR #32 review)
-  for (const r of runs) (byCase[r.case] ||= []).push(r.passed);
+  for (const r of stated) (byCase[r.case] ||= []).push(r.state === 'ok');
   const inconsistent = Object.entries(byCase).filter(([, v]) => v.some(Boolean) && v.some(x => !x)).map(([k]) => k);
-  const passRate = Math.round(100 * runs.filter(r => r.passed).length / runs.length);
   return {
-    schema: 'tune-up/report@0.1', agent: suite.agent, evaluated_at: new Date().toISOString(),
+    schema: REPORT_SCHEMA, agent: suite.agent, evaluated_at: new Date().toISOString(),
     evidence_level: evidenceLevel, adapter: adapter.name, judge: judgeModel, rubric: 'six-part@0.1',
     instructions_sha: hash(instructions), cases: Object.keys(byCase).length, repeats: suite.repeats || 1,
-    pass_rate: passRate, inconsistent_cases: inconsistent, buckets,
+    // Strict: ok out of every expected case-run, as a raw fraction (rounded only for display).
+    counts, pass_rate: counts.expected ? counts.ok / counts.expected : 0, inconsistent_cases: inconsistent, buckets,
     failures: all.filter(f => !f.ok && !f.unsure).map(f => ({ case: f.case, rep: f.rep, bucket: f.bucket, code: f.code, detail: f.detail, quote: f.quote })),
-    runs: runs.map(r => ({ case: r.case, rep: r.rep, passed: r.passed, turns: r.turns })),
+    runs: stated.map(r => ({ case: r.case, rep: r.rep, state: r.state, findings: r.findings, turns: r.turns })),
+    legacy: { pass_rate_lenient: runs.length ? runs.filter(r => lenientPassed(r.findings)).length / runs.length : 0,
+      note: 'Deprecated: counted unsure answers as passes. Never used for any decision; removed in 0.3.' },
   };
 }
 
-// What a tune-up broke: cases that passed every run before and fail a run after, and any rules failure that is new.
+// What a tune-up broke: every matched case-run that was ok before and is not ok after (failed, couldn't tell, missing or
+// errored), and any "Follows your rules" failure that is new.
 /** @param {any} before @param {any} after */
 export function regressions(before, after) {
-  const passedAll = (rep) => { const m = Object.create(null); for (const r of rep.runs) m[r.case] = (m[r.case] ?? true) && r.passed; return m; };
-  const b = passedAll(before), a = passedAll(after);
-  const broke = Object.keys(b).filter(c => b[c] && a[c] === false);
+  const id = (r) => `${r.case}#${r.rep}`;
+  const okBefore = new Set(before.runs.filter(r => r.state === 'ok').map(id));
+  const broke = after.runs.filter(r => okBefore.has(id(r)) && r.state !== 'ok').map(id);
   // Rules failures are compared one by one (case, rule and what was violated, counted), so a second leak in a case
   // that already leaked something else still counts as new.
   // Judge details carry a vote percentage that changes run to run; compare without it.
@@ -69,13 +88,24 @@ const cell = (s) => String(s).replace(/\|/g, '/').replace(/\r?\n/g, ' ');
 
 const ICON = { pass: '✅ pass', warn: '⚠️ warn', fail: '❌ fail', not_available: '— not available', not_tested: '— not tested' };
 
+// The headline in words, never a percentage: "Passed 7 of 10 runs · 2 couldn't tell · 1 failed". Errored and missing
+// runs are named only when there are some.
+export function headline(c) {
+  const parts = [`**Passed ${c.ok} of ${c.expected} run${c.expected === 1 ? '' : 's'}**`];
+  if (c.undetermined) parts.push(`${c.undetermined} couldn't tell`);
+  if (c.failed) parts.push(`${c.failed} failed`);
+  if (c.errored) parts.push(`${c.errored} errored`);
+  if (c.missing) parts.push(`${c.missing} missing`);
+  return parts.join(' · ');
+}
+
 /** @param {any} rep @param {{ title?: string, lift?: number }} [opts] */
 export function toMarkdown(rep, { title, lift } = {}) {
   const L = [];
   L.push(`# ${title || 'Report card'}: ${rep.agent}`, '');
   L.push(`Evidence: Level ${rep.evidence_level} (${['', 'chats only', 're-run tested', 'live telemetry'][rep.evidence_level]}) · ${rep.cases} test cases × ${rep.repeats} runs · judge ${rep.judge} · rubric ${rep.rubric} · ${rep.evaluated_at.slice(0, 10)}`, '');
   if (/^none/.test(rep.judge)) L.push('**Rule checks only.** Most of the report card needs the judge; run again with --consent for the full report.', '');
-  else L.push(`**Pass rate: ${rep.pass_rate}%**${lift != null ? ` · **Fix lift: ${lift > 0 ? '+' : ''}${lift} points**` : ''}${rep.inconsistent_cases.length ? ` · Inconsistent across runs: ${rep.inconsistent_cases.join(', ')}` : ''}`, '');
+  L.push(`${headline(rep.counts)}${lift != null ? ` · **Fix lift: ${lift > 0 ? '+' : ''}${lift} run${Math.abs(lift) === 1 ? '' : 's'}**` : ''}${rep.inconsistent_cases.length ? ` · Inconsistent across runs: ${rep.inconsistent_cases.join(', ')}` : ''}`, '');
   L.push('| Part | Result | Why |', '| --- | --- | --- |');
   for (const b of rep.buckets) {
     let why = b.reason + (b.quote ? ` — "${b.quote}"` : '');

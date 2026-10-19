@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { scrubber } from '../src/redact.js';
 import { parseTranscripts, checkConversation } from '../src/transcripts.js';
-import { buildReport, runPassed } from '../src/report.js';
+import { buildReport } from '../src/report.js';
 
 test('scrub: emails, phones, keys, valid card numbers, SSNs and IPs become stable placeholders', () => {
   const s = scrubber();
@@ -48,7 +48,7 @@ test('friction: a repeated ask and a correction are flagged; a calm chat is not'
 test('report from chats: Keeps you happy is measured; tools are not available', () => {
   const findings = checkConversation([{ role: 'user', content: 'one two three four' }, { role: 'assistant', content: 'ok' }, { role: 'user', content: 'one two three four' }, { role: 'assistant', content: 'ok then' }]);
   const r = buildReport({ suite: { agent: 'x', repeats: 1 }, instructions: '', adapter: { name: 'paste', observesTools: false },
-    runs: [{ case: 'chat-1', rep: 1, passed: runPassed(findings), findings, turns: [], ms: 0, tokens: 0, toolCalls: 0 }], judgeModel: 'none', evidenceLevel: 1 });
+    runs: [{ case: 'chat-1', rep: 1, findings, turns: [], ms: 0, tokens: 0, toolCalls: 0 }], judgeModel: 'none', evidenceLevel: 1 });
   assert.equal(r.buckets.find(b => b.id === 'happy').status, 'fail');
   assert.equal(r.buckets.find(b => b.id === 'tools').status, 'not_available');
 });

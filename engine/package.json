@@ -25,7 +25,8 @@
   "scripts": {
     "test:promised": "node scripts/test.mjs --test-name-pattern=promised",
     "test": "node scripts/test.mjs",
-    "mutate:gate": "node scripts/mutate.mjs --target src/gate.js --tests test/gate.test.js --fail-on-survivors"
+    "mutate:gate": "node scripts/mutate.mjs --target src/gate.js --tests test/gate.test.js --fail-on-survivors",
+    "mutate:tune": "node scripts/mutate.mjs --target src/tune.js --tests test/r2.test.js --fail-on-survivors"
   },
   "publishConfig": {
     "tag": "next"

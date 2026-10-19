@@ -108,10 +108,14 @@ A suite (see [`examples/bookbot.suite.json`](https://github.com/Viaknox/tune-up/
 
 Point `run` and `tune` at a **test copy** of an `http` agent: every case is sent `--repeats` times and again after each tune-up, so real actions (bookings, emails) would repeat. Requests never follow redirects, and up to 4 cases run at a time.
 
-`tune` never proposes an attempt that breaks a case that used to pass or adds a new rules failure, even if its overall lift is positive; the attempts table lists what each one broke.
+Every result is one of: **passed**, **failed**, **couldn't tell** (the judge was unsure, or a chat was held back to protect a secret), **missing** or **errored**. Only *passed* counts as a pass, in `report.md` ("Passed 7 of 10 runs · 2 couldn't tell · 1 failed"), in `report.json` and in `gate.json`; all three use the same classifier.
+
+`tune` counts **lift** as the runs that went from failed to passed, minus the runs that stopped passing. A fix that only turns failures into "couldn't tell" has no lift, and runs moving into or out of "couldn't tell" are listed separately as evidence changes. An attempt is proposed only when it is **verified** (every re-run fully checked, and at least 2 runs per test; `--allow-single-repeat` overrides the second rule and is printed in the verdict), has positive lift, and breaks nothing: no run that passed before may stop passing, and no new rules failure may appear. The attempts table says why each attempt was or was not proposed.
+
+`tune --gate` gates the best eligible attempt's re-run with the same policy as `run` (exit 0, 1 or 3). With no eligible attempt it exits `1` when every attempt was fully checked and none helped, and `3` when any attempt could not be fully checked. It needs a baseline with nothing missing or errored and no more "couldn't tell" than `--max-undetermined` allows (otherwise `2`). `--json` writes `tune.json` (which attempt was chosen and why) and, when an attempt was gated, `gate.json`.
 
 Pasted or exported chats go through `check` (see above). A Grok Bot adapter (an owner-created webhook routine) comes next.
 
 ## Status
 
-This is Phase 0. The rubric (`six-part@0.1`) and the report schema (`tune-up/report@0.1`) will change until the judge is calibrated against human-labelled cases (target: at least 80% agreement). Do not publish badges from these reports yet.
+This is Phase 0. The rubric (`six-part@0.1`) and the report schema (`tune-up/report@0.2`; `tune` refuses older reports and asks for a fresh `run`) will change until the judge is calibrated against human-labelled cases (target: at least 80% agreement). Do not publish badges from these reports yet.

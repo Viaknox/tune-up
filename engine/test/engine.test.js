@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkCase } from '../src/rules.js';
-import { buildReport, runPassed } from '../src/report.js';
+import { buildReport } from '../src/report.js';
+import { stateOf } from '../src/gate.js';
 import { httpAdapter } from '../src/adapters.js';
 import { judgeCase } from '../src/judge.js';
 import { scrubber } from '../src/redact.js';
@@ -68,22 +69,25 @@ test('judge: unsure answers never fail a run; confident ones do', async () => {
   const f = await judgeCase(or, scrubber().sanitize('state'));
   assert.equal(f.find(x => x.code === 'judge:completed').unsure, true);
   assert.equal(f.find(x => x.code === 'judge:followed_rules').ok, false);
-  assert.equal(runPassed(f), false);
-  assert.equal(runPassed(f.filter(x => x.code !== 'judge:followed_rules')), true);
+  // R2: one classifier. A confident failure fails the run; an unsure answer alone leaves it undetermined, never failed.
+  assert.equal(stateOf({ findings: f }, { judged: true }), 'failed');
+  assert.equal(stateOf({ findings: f.filter(x => x.code !== 'judge:followed_rules') }, { judged: true }), 'undetermined');
 });
 
 test('report: one rules failure fails the part (never averaged); happy is not available; inconsistency is shown', () => {
   const ok = { bucket: 'rules', code: 'refuse', ok: true };
   const bad = { bucket: 'rules', code: 'must_not_say', ok: false, detail: 'Revealed "dentist"' };
+  const judged = { bucket: 'done', code: 'judge:completed', ok: true };
   const runs = [
-    ...Array.from({ length: 9 }, (_, i) => ({ case: 'c' + i, rep: 1, passed: true, findings: [ok], turns: [], ms: 1000, tokens: 10, toolCalls: 1 })),
-    { case: 'c0', rep: 2, passed: false, findings: [bad], turns: [], ms: 1000, tokens: 10, toolCalls: 1 },
+    // R2: a judged run needs a judge answer, or the classifier rightly calls it missing; real judged runs always have one.
+    ...Array.from({ length: 9 }, (_, i) => ({ case: 'c' + i, rep: 1, passed: true, findings: [ok, judged], turns: [], ms: 1000, tokens: 10, toolCalls: 1 })),
+    { case: 'c0', rep: 2, passed: false, findings: [bad, judged], turns: [], ms: 1000, tokens: 10, toolCalls: 1 },
   ];
   const r = buildReport({ suite: { agent: 'x', repeats: 2 }, instructions: 'i', adapter: { name: 'm', observesTools: true }, runs, judgeModel: 'j', evidenceLevel: 2 });
   assert.equal(r.buckets.find(b => b.id === 'rules').status, 'fail');
   assert.equal(r.buckets.find(b => b.id === 'happy').status, 'not_available');
   assert.deepEqual(r.inconsistent_cases, ['c0']);
-  assert.equal(r.pass_rate, 90);
+  assert.equal(r.pass_rate, 0.9); assert.deepEqual([r.counts.ok, r.counts.failed, r.counts.expected], [9, 1, 10]);   // R2: a raw fraction
 });
 
 test('http adapter fills the message and history and reads the reply path', async () => {
