@@ -3,15 +3,15 @@
 # the gate and its evidence code, the policy contract, and release config.
 # A PR cannot loosen tests or edit its own CI without Paul's review.
 
-.github/**                  @pjpoulose
-engine/test/**              @pjpoulose
-engine/scripts/**           @pjpoulose
-engine/cli.js               @pjpoulose
-engine/src/**               @pjpoulose
-engine/package.json         @pjpoulose
-engine/LICENSE              @pjpoulose
-engine/RELEASE_CHANNEL      @pjpoulose
-docs/CLI-PLAN.md            @pjpoulose
-docs/RELEASING.md           @pjpoulose
-engine/CHANGELOG.md         @pjpoulose
-.sast-check.toml            @pjpoulose
+.github/**                  @Viaknox/paul-approvers
+engine/test/**              @Viaknox/paul-approvers
+engine/scripts/**           @Viaknox/paul-approvers
+engine/cli.js               @Viaknox/paul-approvers
+engine/src/**               @Viaknox/paul-approvers
+engine/package.json         @Viaknox/paul-approvers
+engine/LICENSE              @Viaknox/paul-approvers
+engine/RELEASE_CHANNEL      @Viaknox/paul-approvers
+docs/CLI-PLAN.md            @Viaknox/paul-approvers
+docs/RELEASING.md           @Viaknox/paul-approvers
+engine/CHANGELOG.md         @Viaknox/paul-approvers
+.sast-check.toml            @Viaknox/paul-approvers
