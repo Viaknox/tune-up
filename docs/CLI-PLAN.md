@@ -13,6 +13,9 @@ then attack and mutation, then frontier-gate `verify` against the checklists bel
 | D6 | Who approves PRs | Claude opens PRs under its own GitHub App identity; Paul approves and merges as the code owner | Paul (option A) |
 | D3–D5 | Gate policy | **Strict everywhere, sequenced:** strict CI gate ships first (R1); then pass / fail / undetermined in the report and `tune` (R2), with the hosted connector re-copied the same day | Panel split (0.31); Paul chose B |
 | Q3 | Judge in CI | Opt-in only (`--consent`). Without it the result reads **PASS: local rules only** | Panel checklist |
+| R2-1 | How R2 wires the classifier | **Strict everywhere:** report.json (`tune-up/report@0.2`), report.md, `tune` and the hosted card all use `gate.js` `stateOf`; lift = failed→ok minus ok→not-ok on matched case-runs; "couldn't tell" moves are evidence changes, never lift | Frontier panel 4/4, consensus 0.98 (`2026-10-19-r2-classifier`); Paul chose A |
+| R2-2 | "Verified" with one run per test | Not verified unless `--allow-single-repeat` (printed in the verdict): one run cannot tell a gain from judge noise | Panel item; Paul, 2026-10-19 |
+| R2-3 | Old lenient number (PG15) | Kept for one release in `report.json` only (`legacy.pass_rate_lenient`), never in report.md or tune output, never used for a decision | Paul, 2026-10-19 |
 
 Panel records: `F:\ENV\Claude outputs\frontier-gate\2026-10-16-cli-gate-policy\` and `...-cli-release-tags\`.
 

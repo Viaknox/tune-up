@@ -121,7 +121,7 @@ test('[promised] boundary: a ScrubError in evaluate marks the run unsure with ju
   const rules = rep.buckets.find(b => b.id === 'rules');
   assert.equal(rules.status, 'warn'); assert.equal(rules.unsure, 1); assert.equal(rules.failed, 0);
   assert.match(JSON.stringify(rules), /too long or complex to scrub safely/);   // a cap hold, not a secret (viaknox PR #31 review)
-  assert.equal(rep.runs[0].passed, true, 'an unsure finding never fails a run on its own');
+  assert.equal(rep.runs[0].state, 'undetermined', 'an unsure finding never fails a run on its own, and since R2 never passes it either');
   assert.equal(calls.length, 0);
   assert.throws(() => real.sanitize('a'.repeat(10), { maxChars: 5 }), ScrubError);
 });
@@ -246,7 +246,7 @@ test('round 42: a run held at a later turn keeps the false "done" its first turn
   const rep = await evaluate({ suite: { cases: [{ id: 'c', turns: ['book it', 'and again'] }] }, instructions: 'x', adapter, or, scrub: scrubber() });
   const b = Object.fromEntries(rep.buckets.map(x => [x.id, x]));
   assert.equal(b.truth.failed, 1); assert.equal(b.rules.unsure, 1);
-  assert.equal(rep.runs[0].passed, false); assert.equal(calls.length, 0);
+  assert.equal(rep.runs[0].state, 'failed'); assert.equal(calls.length, 0);
 });
 test('round 42: cli.js check finishes with a report when a pasted chat exceeds the scrubber cap (no crash)', () => {
   const d = mkdtempSync(join(tmpdir(), 'tu-')), f = join(d, 'chat.txt');

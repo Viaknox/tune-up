@@ -331,8 +331,9 @@ test('G10/G11/G11b/G11c/T4: options are strict; loosening is explicit; without -
   assert.equal(cli(['check', chat, '--out', o, '--gate', '--min', '99.5']).status, EXIT.PASS);
   const help = cli(['--help']);
   assert.equal(help.status, 0); assert.match(help.stdout, /Exit codes with --gate: 0 PASS \(judged\) or PASS: local rules only, 1 FAIL, 3 UNDETERMINED/);
-  // The only loosening options are the three documented ones; nothing offers to skip, ignore or warn.
-  const words = help.stdout.toLowerCase().replace(/--allow-rules-fail|--max-undetermined/g, '');
+  // The only loosening options are the documented ones (the three gate options, and R2's --allow-single-repeat for tune,
+  // approved by Paul 2026-10-19 and printed in the verdict); nothing offers to skip, ignore or warn.
+  const words = help.stdout.toLowerCase().replace(/--allow-rules-fail|--max-undetermined|--allow-single-repeat/g, '');
   for (const w of ['skip', 'ignore', 'allow', 'warn', 'lenient', 'soft']) assert.ok(!words.includes(w), `--help offers "${w}"`);
   const v = cli(['--version']);
   assert.equal(v.status, 0); assert.equal(v.stdout.trim(), JSON.parse(readFileSync(join(ENGINE, 'package.json'), 'utf8')).version);

@@ -66,7 +66,7 @@ jobs:
           { echo "version=$version"; echo "channel=$channel"; echo "prerelease=$prerelease"; echo "release=$release"; } >> "$GITHUB_OUTPUT"
       - name: Full test suite and gate mutation check on this commit
         working-directory: engine
-        run: npm test && npm run mutate:gate
+        run: npm test && npm run mutate:gate && npm run mutate:tune
       - name: Pack, check the file allowlist, write the approval summary
         id: pack
         working-directory: engine

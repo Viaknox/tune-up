@@ -57,10 +57,11 @@ test('[promised] a --private word inside an email address is never sent to the h
 
 test('codex 4: a tune-up that breaks a passing case or adds a rules failure is a regression', () => {
   const rep = (runs, failures = []) => ({ runs, failures });
-  const before = rep([{ case: 'a', passed: true }, { case: 'b', passed: false }], [{ case: 'b', bucket: 'done', code: 'x' }]);
-  assert.deepEqual(regressions(before, rep([{ case: 'a', passed: false }, { case: 'b', passed: true }])), ['a']);
-  assert.deepEqual(regressions(before, rep([{ case: 'a', passed: true }, { case: 'b', passed: false }], [{ case: 'b', bucket: 'rules', code: 'must_not_say', detail: 'Revealed "HR"' }])), ['b (must_not_say: Revealed "HR")']);
-  assert.deepEqual(regressions(before, rep([{ case: 'a', passed: true }, { case: 'b', passed: true }])), []);
+  // R2: runs carry the classifier's state, and a regression is named per case-run (case#rep).
+  const before = rep([{ case: 'a', rep: 1, state: 'ok' }, { case: 'b', rep: 1, state: 'failed' }], [{ case: 'b', bucket: 'done', code: 'x' }]);
+  assert.deepEqual(regressions(before, rep([{ case: 'a', rep: 1, state: 'failed' }, { case: 'b', rep: 1, state: 'ok' }])), ['a#1']);
+  assert.deepEqual(regressions(before, rep([{ case: 'a', rep: 1, state: 'ok' }, { case: 'b', rep: 1, state: 'failed' }], [{ case: 'b', bucket: 'rules', code: 'must_not_say', detail: 'Revealed "HR"' }])), ['b (must_not_say: Revealed "HR")']);
+  assert.deepEqual(regressions(before, rep([{ case: 'a', rep: 1, state: 'ok' }, { case: 'b', rep: 1, state: 'ok' }])), []);
 });
 
 test('codex 5: scrubbing a card keeps the space after it, both ways', () => {
@@ -340,8 +341,8 @@ test('review: a keyfile saved with a byte-order mark still loads', async () => {
 });
 test('review: a case id that looks like a rule row does not hide the rule failure', () => {
   const f = { case: 'c', bucket: 'rules', code: 'must_not_say', detail: 'Revealed "x"' };
-  const before = { runs: [{ case: 'c (must_not_say: Revealed "x")', passed: true }], failures: [] };
-  const after = { runs: [{ case: 'c (must_not_say: Revealed "x")', passed: false }], failures: [f] };
+  const before = { runs: [{ case: 'c (must_not_say: Revealed "x")', rep: 1, state: 'ok' }], failures: [] };
+  const after = { runs: [{ case: 'c (must_not_say: Revealed "x")', rep: 1, state: 'failed' }], failures: [f] };
   assert.equal(regressions(before, after).length, 2);
 });
 

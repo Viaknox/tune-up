@@ -2,7 +2,8 @@
 import { checkCase } from './rules.js';
 import { judgeCase, judgeHeld, transcript, heldFinding, JUDGE_MODEL } from './judge.js';
 import { HeldBack, AgentReplyError } from './openrouter.js';
-import { buildReport, runPassed } from './report.js';
+import { buildReport } from './report.js';
+import { stateOf } from './gate.js';
 import { scrubber } from './redact.js';
 
 export const CONCURRENCY = 4;
@@ -49,11 +50,11 @@ export async function evaluate({ suite, instructions, adapter, or, log = () => {
       const proven = () => (turns.length ? checkCase(c, turns, adapter).filter(f => MONOTONE.has(f.code) && !f.ok && !f.unsure) : []);
       const findings = held ? [heldFinding(heldCap), ...proven()] : down ? [agentError(down), ...proven()]
         : [...checkCase(c, turns, adapter), ...await judge(or, scrub, transcript(c, instructions, turns, adapter.observesTools))];
-      const passed = runPassed(findings);
-      runs.push({ case: c.id, rep, passed, findings, turns: turns.map(t => ({ reply: t.reply, tools: t.tools, ...(t.truncated ? { truncated: true } : {}) })),
+      runs.push({ case: c.id, rep, findings, turns: turns.map(t => ({ reply: t.reply, tools: t.tools, ...(t.truncated ? { truncated: true } : {}) })),
         ms: turns.reduce((a, t) => a + t.ms, 0), tokens: turns.some(t => t.tokens == null) ? null : turns.reduce((a, t) => a + t.tokens, 0),
         toolCalls: adapter.observesTools ? turns.reduce((a, t) => a + ((t.tools || []).length), 0) : null });
-      log(`${c.id} run ${rep}: ${passed ? 'pass' : 'FAIL'}`);
+      const state = stateOf({ findings }, { judged: true });
+      log(`${c.id} run ${rep}: ${state === 'ok' ? 'pass' : state === 'failed' ? 'FAIL' : state === 'undetermined' ? "couldn't tell" : state}`);
     }
     return runs;
   });
