@@ -24,7 +24,12 @@ Decision record: frontier-gate run `2026-10-20-judge-calibration`, where all 4 r
 - Mapping: agent instructions = the domain policy; test intent = the user's task instruction; tool calls and results are shown to the judge. The reward and any reference outputs are **never** shown to it, and a test checks this.
 - Airline tasks whose labels are known to be noisy (tau2-bench) are listed before the run. Results are reported both with and without them, and no case is dropped because the judge disagreed.
 
-**Track B (Level 1, human).** 100 **new** real chats from Paul's bots, dated after 2026-10-11 and never seen by the judge's designers. They run through the scrubber and never-send list first.
+**Track B (Level 1, human).** 100 chats in total, all labelled blind by Paul. The number of own-bot chats is not guaranteed, so the mix is fixed by a rule decided before anything runs:
+- **Own-bot chats first.** Every real chat from Paul's bots dated after 2026-10-11 and exported by the cut-off date set at pre-registration. These chats have never been seen by the judge's designers, and they go through the scrubber and never-send list first.
+- **Public top-up.** WildChat ([allenai/WildChat](https://huggingface.co/datasets/allenai/WildChat), ODC-BY, de-identified) makes up the rest of the 100.
+  - **Selection:** a fixed seed picks English chats with 3 or more turns. Chats that WildChat marks as redacted or toxic are excluded.
+  - **No bot instructions:** WildChat chats have none, so the `followed_rules` question is not asked for them. Paul labels them on "did the assistant give the user what they needed?"
+- **Reporting:** results are reported for the whole set and for each source separately. If there are fewer than 50 own-bot chats, that slice is marked "indicative".
 - Paul labels every chat PASS or FAIL with a one-line reason, in a sheet that hides the judge's verdict.
 - **Fresh-context reference panel** (there is no second human labeller):
   - **Setup:** 3 models from 3 different vendors, none of them Jev, all through OpenRouter. Each chat goes to each model as a brand-new request with no history. The request holds only the scrubbed chat, the bot's instructions and the same written label guide Paul uses, and asks the same PASS/FAIL question.
@@ -39,7 +44,7 @@ Decision record: frontier-gate run `2026-10-20-judge-calibration`, where all 4 r
 | Metric | Definition | Bar |
 |---|---|---|
 | Agreement | Judge ok/failed vs label, on runs the judge decided | Wilson 95% **lower** bound ≥ 80% |
-| False pass | Judge **ok** among label **fails** (all label fails in the denominator) | Track A: one-sided 95% upper bound ≤ 10%. Track B: see open decision 2 |
+| False pass | Judge **ok** among label **fails** (all label fails in the denominator) | Track A: one-sided 95% upper bound ≤ 10%. Track B: observed ≤ 10%, with the upper bound published next to it |
 | Coverage | Judge-unsure share. Scrubber-held items are counted and reported separately. | ≤ 20% |
 | Kappa | Cohen's κ on decided runs | ≥ 0.6, with confidence interval |
 | Stability | Verdict flips across 3 pre-declared repeat runs of the full 3-vote judge | ≤ 2%, all repeats published |
@@ -65,5 +70,6 @@ Panel numbers are reported next to these and never replace them: Paul vs panel m
 ## 7. Open decisions for Paul
 
 1. ~~Second labeller~~ Decided (Paul, 2026-10-20): no team member is available, so a fresh-context panel of 3 models replaces the second labeller (§3). The panel is a cross-check, not the truth.
-2. **Track B false-pass bar.** With about 40 label-fails, a strict "upper bound ≤ 10%" allows **0** false passes (1 gives 10.5%). The alternative is "observed ≤ 10%, bound published". For comparison, Track A's 120 fails allow up to 6.
-3. **Chat source.** Can about 100 new chats be exported from the bots, the same way as in v1?
+2. ~~Track B false-pass bar~~ Decided (Paul, 2026-10-20): the looser bar, observed ≤ 10% with the bound published. Track A keeps the strict bound.
+3. ~~Chat source~~ Decided (Paul, 2026-10-20): 100 own-bot chats are not guaranteed, so the gap is topped up from WildChat (§3).
+4. **Still open: the cut-off date for own-bot chats.** Default: 2 weeks after this plan merges.
