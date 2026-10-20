@@ -26,7 +26,12 @@ Decision record: frontier-gate run `2026-10-20-judge-calibration`, where all 4 r
 
 **Track B (Level 1, human).** 100 **new** real chats from Paul's bots, dated after 2026-10-11 and never seen by the judge's designers. They run through the scrubber and never-send list first.
 - Paul labels every chat PASS or FAIL with a one-line reason, in a sheet that hides the judge's verdict.
-- A second labeller blind-labels 30 of them, working from the same written guide and blind to Paul's labels and to the judge. This measures the human ceiling.
+- **Fresh-context reference panel** (there is no second human labeller):
+  - **Setup:** 3 models from 3 different vendors, none of them Jev, all through OpenRouter. Each chat goes to each model as a brand-new request with no history. The request holds only the scrubbed chat, the bot's instructions and the same written label guide Paul uses, and asks the same PASS/FAIL question.
+  - **Settings:** temperature 0, a fixed seed where the model supports one, and model ID and provider pinned when the plan is pre-registered. Every call is run twice to measure flips, because hosted models are not fully deterministic even at temperature 0.
+  - **Coverage:** the panel labels all 100 Track B chats and also the Track A test set.
+  - **Role:** a cross-check, never the truth. It shows how clear the labels are and how Jev compares with stronger models.
+- **Disagreement review.** Some chats will have all 3 panel models agreeing with each other but disagreeing with Paul. Paul re-labels only those, blind to Jev and to the panel. Both the original and the revised labels are published, and results are scored on both.
 - v1's 50 chats are the only dev set. All 100 new chats are test.
 
 ## 4. Pass bar (per track, both tracks must pass)
@@ -39,7 +44,7 @@ Decision record: frontier-gate run `2026-10-20-judge-calibration`, where all 4 r
 | Kappa | Cohen's κ on decided runs | ≥ 0.6, with confidence interval |
 | Stability | Verdict flips across 3 pre-declared repeat runs of the full 3-vote judge | ≤ 2%, all repeats published |
 
-We also publish the full confusion matrix, all five run states (missing and errored never count as handled), coverage split by label pass vs fail, model/domain slices (marked indicative) and the precision of judge-ok verdicts.
+Panel numbers are reported next to these and never replace them: Paul vs panel majority (κ), panel vs Track A ground truth, and Jev vs panel. They are labelled "model reference, not a human ceiling". We also publish the full confusion matrix, all five run states (missing and errored never count as handled), coverage split by label pass vs fail, model/domain slices (marked indicative) and the precision of judge-ok verdicts.
 
 ## 5. Guards against "tuned until green"
 
@@ -55,10 +60,10 @@ We also publish the full confusion matrix, all five run states (missing and erro
 - It contains: the tau-bench adapter, a sampler with seed, the blind label sheet (CSV), a scorer (pure, unit-tested, mutation-tested like the gate), the manifest and a report.
 - Engine change: one report footer field (calibration manifest ID plus rubric hash). It ships as a minor bump on `next`.
 - Published: scripts, tau-bench IDs, raw judge probabilities per call (model ID, provider, timestamp), and label files. Level 1 chats are published only after a second never-send pass; otherwise only their hashes are published.
-- Estimates: about 3–4 days of build, about 1.5 h of Paul's labelling, and under $2 of judge cost.
+- Estimates: about 3–4 days of build, about 1.5 h of Paul's labelling, and about $5–15 of model cost (Jev plus the 3-model panel, 2 runs each).
 
 ## 7. Open decisions for Paul
 
-1. **Second labeller** for 30 chats: who, or should the human ceiling be reported as single-labeller only?
+1. ~~Second labeller~~ Decided (Paul, 2026-10-20): no team member is available, so a fresh-context panel of 3 models replaces the second labeller (§3). The panel is a cross-check, not the truth.
 2. **Track B false-pass bar.** With about 40 label-fails, a strict "upper bound ≤ 10%" allows **0** false passes (1 gives 10.5%). The alternative is "observed ≤ 10%, bound published". For comparison, Track A's 120 fails allow up to 6.
 3. **Chat source.** Can about 100 new chats be exported from the bots, the same way as in v1?
