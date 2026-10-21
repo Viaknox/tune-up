@@ -312,7 +312,11 @@ test('calibration runner: pool keeps order, caps concurrency and turns a throw i
   });
   assert.equal(peak, 3);
   assert.deepEqual(out.map(r => r.id), items.map(i => i.id));
-  assert.deepEqual(out[4], { id: 'i4', label: 'pass', state: 'errored' });
+  assert.deepEqual(out[4], { id: 'i4', label: 'pass', state: 'errored', error: 'boom' });
+  const long = await runPool([{ id: 'x', label: 'fail' }], 1, async () => { throw new Error('a'.repeat(300) + '\nsecond line'); });
+  assert.equal(long[0].error, 'a'.repeat(200));
+  const odd = await runPool([{ id: 'y', label: 'fail' }], 1, async () => { throw 'plain'; });   // eslint-disable-line no-throw-literal
+  assert.equal(odd[0].error, 'plain');
   assert.equal(out[8].n, 8);
   assert.deepEqual(await runPool([], 4, async () => 1), []);
   const one = []; await runPool([{ id: 'a' }, { id: 'b' }], 0, async (it) => { one.push(it.id); });

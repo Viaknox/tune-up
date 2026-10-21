@@ -50,14 +50,15 @@ export function preregMismatches(prereg, actual) {
 }
 
 // Runs `fn` over items with at most `limit` in flight; results keep the input order. A thrown error becomes an
-// errored row for that item, so one bad call never hides the others.
+// errored row for that item, so one bad call never hides the others. The row keeps the error's first line (capped):
+// errors from the OpenRouter client name the status and the provider's message, never the text that was sent.
 export async function pool(items, limit, fn) {
   const out = new Array(items.length);
   let next = 0;
   const worker = async () => {
     while (next < items.length) {
       const i = next++;
-      try { out[i] = await fn(items[i], i); } catch { out[i] = { id: items[i].id, label: items[i].label, state: 'errored' }; }
+      try { out[i] = await fn(items[i], i); } catch (e) { out[i] = { id: items[i].id, label: items[i].label, state: 'errored', error: String((e && e.message) || e).split('\n')[0].slice(0, 200) }; }
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
