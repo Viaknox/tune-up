@@ -27,7 +27,7 @@
     "test": "node scripts/test.mjs",
     "mutate:gate": "node scripts/mutate.mjs --target src/gate.js --tests test/gate.test.js --fail-on-survivors",
     "mutate:tune": "node scripts/mutate.mjs --target src/tune.js --tests test/r2.test.js --fail-on-survivors",
-    "mutate:calibration": "node scripts/mutate.mjs --target calibration/score.js --tests test/calibration.test.js --fail-on-survivors && node scripts/mutate.mjs --target calibration/tau.js --tests test/calibration.test.js --fail-on-survivors"
+    "mutate:calibration": "node scripts/mutate.mjs --target calibration/score.js --tests test/calibration.test.js --fail-on-survivors && node scripts/mutate.mjs --target calibration/tau.js --tests test/calibration.test.js --fail-on-survivors && node scripts/mutate.mjs --target calibration/runner.js --tests test/calibration.test.js --fail-on-survivors"
   },
   "publishConfig": {
     "tag": "next"

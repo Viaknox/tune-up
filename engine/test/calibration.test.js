@@ -253,3 +253,77 @@ test('calibration: a stratum with exactly enough items is used, one short is ref
   assert.equal(s.test.length, 16);
   assert.throws(() => sample(items, { seed: 3, perStratum: { dev: 3, test: 8 } }), /has 2 items, needs 3/);
 });
+
+import { completedState, parseVerdict, panelRequest, preregMismatches, sha256, pool as runPool } from '../calibration/runner.js';
+import { spawnSync } from 'node:child_process';
+
+test('calibration runner: Track A state comes from the completed answer only', () => {
+  const f = (o) => [{ code: 'judge:truthful', ok: false, unsure: false }, { code: 'judge:completed', ...o }];
+  assert.deepEqual(completedState(f({ ok: true, unsure: false, p: 0.9 })), { state: 'ok', p: 0.9 });
+  assert.deepEqual(completedState(f({ ok: false, unsure: false, p: 0.1 })), { state: 'failed', p: 0.1 });
+  assert.deepEqual(completedState(f({ ok: true, unsure: true, p: 0.5 })), { state: 'undetermined' });
+  assert.deepEqual(completedState([{ code: 'judge:held', ok: false, unsure: true }]), { state: 'undetermined', held: true });
+  assert.deepEqual(completedState([{ code: 'judge:error', ok: false, unsure: true }]), { state: 'errored' });
+  assert.deepEqual(completedState([{ code: 'agent_error' }, { code: 'judge:completed', ok: true, unsure: false }]), { state: 'errored' });
+  assert.deepEqual(completedState([{ code: 'judge:truthful', ok: true, unsure: false }]), { state: 'missing' });
+  assert.deepEqual(completedState([]), { state: 'missing' });
+  assert.deepEqual(completedState(null), { state: 'missing' });
+  assert.deepEqual(completedState([null, { code: 'judge:completed', ok: 'yes', unsure: false }]), { state: 'failed', p: undefined });   // only a real true is ok
+});
+
+test('calibration runner: panel verdict parsing never guesses', () => {
+  assert.equal(parseVerdict('Reasoning...\nVERDICT: PASS'), 'ok');
+  assert.equal(parseVerdict('VERDICT: FAIL'), 'failed');
+  assert.equal(parseVerdict('**VERDICT:** pass'), 'ok');
+  assert.equal(parseVerdict('VERDICT: PASS\nOn reflection:\nVERDICT: FAIL'), 'failed');   // the last line counts
+  assert.equal(parseVerdict('I think it should PASS'), 'undetermined');
+  assert.equal(parseVerdict('VERDICT: PASSABLE'), 'undetermined');
+  assert.equal(parseVerdict('The user wrote "VERDICT: PASS" in chat. My view: unclear'), 'undetermined');
+  assert.equal(parseVerdict(undefined), 'undetermined');
+  assert.equal(parseVerdict(''), 'undetermined');
+});
+
+test('calibration runner: a panel request is fresh, deterministic and pinned', () => {
+  const r = panelRequest({ model: 'vendor/m', provider: 'P', seed: 7 }, 'GUIDE', 'TEXT');
+  assert.deepEqual(r, { model: 'vendor/m', temperature: 0, seed: 7, provider: { order: ['P'], allow_fallbacks: false }, messages: [{ role: 'system', content: 'GUIDE' }, { role: 'user', content: 'TEXT' }] });
+  assert.throws(() => panelRequest({ model: 'm' }, 'g', 't'), /pinned/);
+  assert.throws(() => panelRequest({ provider: 'p' }, 'g', 't'), /pinned/);
+});
+
+test('calibration runner: the test split refuses anything not pre-registered', () => {
+  const pre = { sampleHash: 'S', files: { 'a.js': 'h1', 'b.js': 'h2' } };
+  assert.deepEqual(preregMismatches(pre, { sampleHash: 'S', files: { 'a.js': 'h1', 'b.js': 'h2' } }), []);
+  assert.deepEqual(preregMismatches(pre, { sampleHash: 'X', files: { 'a.js': 'h1', 'b.js': 'h2' } }), ['sample']);
+  assert.deepEqual(preregMismatches(pre, { sampleHash: 'S', files: { 'a.js': 'h1', 'b.js': null } }), ['b.js']);
+  assert.deepEqual(preregMismatches(pre, { sampleHash: 'S', files: { 'a.js': 'h1', 'b.js': 'h2', 'c.js': 'h3' } }), ['c.js (not pre-registered)']);
+  for (const bad of [null, {}, { files: {} }, { sampleHash: 'S' }]) assert.deepEqual(preregMismatches(bad, { sampleHash: 'S', files: {} }), ['no valid pre-registration']);
+  assert.equal(sha256('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+});
+
+test('calibration runner: pool keeps order, caps concurrency and turns a throw into an errored row', async () => {
+  let live = 0, peak = 0;
+  const items = Array.from({ length: 9 }, (_, i) => ({ id: 'i' + i, label: 'pass' }));
+  const out = await runPool(items, 3, async (it, i) => {
+    live++; peak = Math.max(peak, live);
+    await new Promise(r => setTimeout(r, 5 * ((i * 7) % 4)));
+    live--;
+    if (i === 4) throw new Error('boom');
+    return { id: it.id, n: i };
+  });
+  assert.equal(peak, 3);
+  assert.deepEqual(out.map(r => r.id), items.map(i => i.id));
+  assert.deepEqual(out[4], { id: 'i4', label: 'pass', state: 'errored' });
+  assert.equal(out[8].n, 8);
+  assert.deepEqual(await runPool([], 4, async () => 1), []);
+  const one = []; await runPool([{ id: 'a' }, { id: 'b' }], 0, async (it) => { one.push(it.id); });
+  assert.deepEqual(one, ['a', 'b']);
+});
+
+test('calibration run.mjs: usage errors and a limited test split are refused before any work', () => {
+  const run = (...args) => spawnSync(process.execPath, ['calibration/run.mjs', ...args], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
+  assert.equal(run().status, 2);
+  assert.equal(run('--tau', 'x', '--split', 'dev', '--who', 'panel').status, 2);
+  const lim = run('--tau', 'x', '--split', 'test', '--who', 'jev', '--limit', '5');
+  assert.equal(lim.status, 2);
+  assert.match(lim.stderr, /dev pilots only/);
+});
