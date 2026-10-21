@@ -20,7 +20,7 @@ Decision record: frontier-gate run `2026-10-20-judge-calibration`, where all 4 r
 
 **Track A (Level 2, objective).** Trajectories from `sierra-research/tau-bench` `historical_trajectories` (MIT): 1,980 tool-using customer-service runs (gpt-4o and Claude 3.5 Sonnet, airline and retail), each with a deterministic reward (final database state and required outputs).
 - Sample 300 with a fixed seed, stratified by model, domain and reward (balanced pass and fail).
-- Split by task group, so repeats of one task never span dev and test. 60 go to dev and 240 to test.
+- Split by task group, so repeats of one task never span dev and test. 64 go to dev (8 per stratum) and 240 to test (30 per stratum). The drawn sample is committed in `engine/calibration/track-a.sample.json` (seed, tau-bench commit, file hashes, ids, sample hash).
 - Mapping: agent instructions = the domain policy; test intent = the user's task instruction; tool calls and results are shown to the judge. The reward and any reference outputs are **never** shown to it, and a test checks this.
 - Airline tasks whose labels are known to be noisy (tau2-bench) are listed before the run. Results are reported both with and without them, and no case is dropped because the judge disagreed.
 
@@ -61,7 +61,7 @@ Panel numbers are reported next to these and never replace them: Paul vs panel m
 
 ## 6. Build
 
-- Tooling lives in `calibration/` at the repo root. It is outside `engine/` and outside the npm `files` allowlist, so it adds no package dependency.
+- Tooling lives in `engine/calibration/`. It is outside the npm `files` allowlist, so it never ships. Keeping it under `engine/` lets it reuse the test runner, the count ratchet and the mutation check (zero survivors, run in CI).
 - It contains: the tau-bench adapter, a sampler with seed, the blind label sheet (CSV), a scorer (pure, unit-tested, mutation-tested like the gate), the manifest and a report.
 - Engine change: one report footer field (calibration manifest ID plus rubric hash). It ships as a minor bump on `next`.
 - Published: scripts, tau-bench IDs, raw judge probabilities per call (model ID, provider, timestamp), and label files. Level 1 chats are published only after a second never-send pass; otherwise only their hashes are published.
