@@ -28,7 +28,7 @@ jobs:
       # The CI gate's own code must have no surviving mutants: tests that pass whatever the code does fail here
       # (agenttuneup CLI plan T7).
       - if: matrix.node == '22'
-        run: cd engine && npm run mutate:gate && npm run mutate:tune
+        run: cd engine && npm run mutate:gate && npm run mutate:tune && npm run mutate:calibration
 
   # One stable check named "engine" for branch protection: passes only when every test cell and every packed-install
   # smoke cell passed (PR #32 review). `always()` makes
